@@ -1,10 +1,21 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { getDb, logActivity } from "@/lib/db";
-import { MAX_PROMO_ITEMS, PROMO_FORMATS, PROMO_THEMES } from "@/lib/promo-options";
-import { composePromo, deletePromoFile } from "@/lib/promo";
+import {
+  MAX_PROMO_ITEMS,
+  PROMO_FORMATS,
+  PROMO_THEMES,
+  PROMO_TYPES,
+  computeItem,
+  formatRupiah,
+  parseAmount,
+  type PromoParams,
+} from "@/lib/promo-options";
+import { composePromo, deletePromoFile, type PromoSpec, type PromoSpecItem } from "@/lib/promo";
 import { resolveUploadPath } from "@/lib/storage";
 
 const clean = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+const bad = (error: string, status = 400) => NextResponse.json({ error }, { status });
 
 export async function GET() {
   const rows = getDb()
@@ -15,56 +26,104 @@ export async function GET() {
   return NextResponse.json({ designs: rows });
 }
 
-// Body: { title, subtitle, footer, badge, format, theme, items: [{ image_id, name, price, old_price }] }
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const format = clean(body.format, 20);
     const theme = clean(body.theme, 20);
-    if (!PROMO_FORMATS.some((f) => f.id === format) || !PROMO_THEMES.some((t) => t.id === theme)) {
-      return NextResponse.json({ error: "Format atau tema tidak valid." }, { status: 400 });
+    const type = clean(body.promo_type, 20);
+
+    if (!PROMO_FORMATS.some((f) => f.id === format)) return bad("Ukuran tidak valid.");
+    if (!PROMO_THEMES.some((t) => t.id === theme)) return bad("Tema tidak valid.");
+    if (!PROMO_TYPES.some((t) => t.id === type)) return bad("Jenis promo tidak valid.");
+
+    const params: PromoParams = {
+      discountPercent: Math.round(Number(body.discount_percent)),
+      discountAmount: parseAmount(String(body.discount_amount ?? "")) ?? 0,
+      buyQty: Math.round(Number(body.buy_qty)),
+      freeQty: Math.round(Number(body.free_qty)),
+      bundlePrice: clean(body.bundle_price, 30),
+    };
+
+    if (type === "diskon_persen" && !(params.discountPercent >= 1 && params.discountPercent <= 90)) {
+      return bad("Persen diskon harus antara 1 dan 90.");
     }
-    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (type === "potongan_rp" && params.discountAmount <= 0) {
+      return bad("Isi nominal potongan dalam rupiah.");
+    }
+    if (type === "beli_gratis") {
+      const okQty = (n: number) => Number.isInteger(n) && n >= 1 && n <= 10;
+      if (!okQty(params.buyQty) || !okQty(params.freeQty)) {
+        return bad("Jumlah beli dan gratis harus antara 1 dan 10.");
+      }
+    }
+
+    const rawItems = Array.isArray(body.items) ? (body.items as Record<string, unknown>[]) : [];
     if (rawItems.length < 1 || rawItems.length > MAX_PROMO_ITEMS) {
-      return NextResponse.json(
-        { error: `Pilih 1 sampai ${MAX_PROMO_ITEMS} produk.` },
-        { status: 400 }
-      );
+      return bad(`Pilih 1 sampai ${MAX_PROMO_ITEMS} produk.`);
+    }
+    if (type === "bundling" && rawItems.length < 2) {
+      return bad("Paket bundling butuh minimal 2 produk.");
     }
 
     const db = getDb();
-    const items: { path: string; name: string; price: string; old_price: string }[] = [];
-    for (const r of rawItems as Record<string, unknown>[]) {
-      const id = Number(r.image_id);
+    const items: PromoSpecItem[] = [];
+    const normals: (number | null)[] = [];
+
+    for (const r of rawItems) {
       const row = db
         .prepare("SELECT name, stored_filename FROM images WHERE id = ?")
-        .get(id) as { name: string; stored_filename: string } | undefined;
-      if (!row) {
-        return NextResponse.json({ error: "Ada gambar yang tidak ditemukan." }, { status: 404 });
-      }
+        .get(Number(r.image_id)) as { name: string; stored_filename: string } | undefined;
+      if (!row) return bad("Ada gambar yang tidak ditemukan.", 404);
       const p = resolveUploadPath(row.stored_filename);
+      if (!p) return bad("File gambar tidak valid.");
+      const name = clean(r.name, 60) || row.name;
       const price = clean(r.price, 30);
-      if (!p || !price) {
-        return NextResponse.json({ error: "Setiap produk wajib punya harga." }, { status: 400 });
+      const oldPrice = clean(r.old_price, 30);
+
+      if (type === "bundling") {
+        normals.push(parseAmount(price));
+        items.push({ path: p, name, price_text: "", old_text: "", tag: "" });
+      } else {
+        const c = computeItem(type, params, price, oldPrice);
+        if (!c.ok) return bad(`${name}: ${c.error}`);
+        items.push({ path: p, name, price_text: c.priceText, old_text: c.oldText, tag: c.tag });
       }
-      items.push({
-        path: p,
-        name: clean(r.name, 60) || row.name,
-        price,
-        old_price: clean(r.old_price, 30),
-      });
+    }
+
+    let bundle: PromoSpec["bundle"];
+    if (type === "bundling") {
+      const bp = parseAmount(params.bundlePrice);
+      if (!bp) return bad("Isi harga paket (angka).");
+      const allKnown = normals.every((n) => n != null && n > 0);
+      let oldText = "";
+      let tag = "";
+      if (allKnown) {
+        const total = (normals as number[]).reduce((a, b) => a + b, 0);
+        if (bp >= total) {
+          return bad(`Harga paket harus lebih murah dari total harga normal (${formatRupiah(total)}).`);
+        }
+        oldText = formatRupiah(total);
+        tag = `HEMAT ${formatRupiah(total - bp)}`;
+      }
+      bundle = { label: "PAKET HEMAT", price_text: formatRupiah(bp), old_text: oldText, tag };
     }
 
     const title = clean(body.title, 40);
-    const filename = await composePromo({
+    const seed = crypto.randomInt(1, 2_000_000_000);
+    const spec: PromoSpec = {
       format,
       theme,
+      seed,
+      mode: type === "bundling" ? "bundle" : "items",
       title,
       subtitle: clean(body.subtitle, 80),
       footer: clean(body.footer, 80),
       badge: clean(body.badge, 16),
       items,
-    });
+      bundle,
+    };
+    const filename = await composePromo(spec);
 
     const result = db
       .prepare(
@@ -75,31 +134,36 @@ export async function POST(req: Request) {
         title || "Promo",
         format,
         theme,
-        JSON.stringify(items.map((i) => ({ name: i.name, price: i.price, old_price: i.old_price }))),
+        JSON.stringify({
+          promo_type: type,
+          seed,
+          items: items.map((i) => ({
+            name: i.name,
+            price: i.price_text,
+            old: i.old_text,
+            tag: i.tag,
+          })),
+          bundle,
+        }),
         filename
       );
     const id = Number(result.lastInsertRowid);
-    logActivity("Buat desain promo", "promo", id, `${items.length} produk`);
+    logActivity("Buat desain promo", "promo", id, `${type}, ${items.length} produk`);
     return NextResponse.json({ id }, { status: 201 });
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Gagal membuat desain." },
-      { status: 500 }
-    );
+    return bad(e instanceof Error ? e.message : "Gagal membuat desain.", 500);
   }
 }
 
 // DELETE /api/promo?id=5
 export async function DELETE(req: Request) {
   const id = Number(new URL(req.url).searchParams.get("id"));
-  if (!Number.isInteger(id) || id <= 0) {
-    return NextResponse.json({ error: "ID tidak valid." }, { status: 400 });
-  }
+  if (!Number.isInteger(id) || id <= 0) return bad("ID tidak valid.");
   const db = getDb();
   const row = db
     .prepare("SELECT output_filename FROM promo_designs WHERE id = ?")
     .get(id) as { output_filename: string } | undefined;
-  if (!row) return NextResponse.json({ error: "Desain tidak ditemukan." }, { status: 404 });
+  if (!row) return bad("Desain tidak ditemukan.", 404);
   deletePromoFile(row.output_filename);
   db.prepare("DELETE FROM promo_designs WHERE id = ?").run(id);
   logActivity("Hapus desain promo", "promo", id, null);

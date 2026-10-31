@@ -11,21 +11,25 @@ export const PROMO_DIR = path.join(UPLOAD_DIR, "promo");
 const SCRIPT = path.join(process.cwd(), "scripts", "compose_promo.py");
 const SAFE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/;
 
+export type PromoSpecItem = {
+  path: string;
+  name: string;
+  price_text: string;
+  old_text: string;
+  tag: string;
+};
+
 export type PromoSpec = {
   format: string;
   theme: string;
+  seed: number;
+  mode: "items" | "bundle";
   title: string;
   subtitle: string;
   footer: string;
   badge: string;
-  promo_type: string;
-  discount: string;
-  buy_qty: string;
-  free_qty: string;
-  min_qty: string;
-  bundle_price: string;
-  bundle_label: string;
-  items: { path: string; name: string; price: string; old_price: string }[];
+  items: PromoSpecItem[];
+  bundle?: { label: string; price_text: string; old_text: string; tag: string };
 };
 
 export function promoPath(filename: string): string | null {
