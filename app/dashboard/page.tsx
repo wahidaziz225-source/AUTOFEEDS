@@ -1,7 +1,16 @@
+import Link from "next/link";
 import { connection } from "next/server";
-import { ImageIcon, Sparkles, MessageSquareText, ScanSearch } from "lucide-react";
+import {
+  ImageIcon,
+  Sparkles,
+  MessageSquareText,
+  ScanSearch,
+  Upload,
+  Megaphone,
+} from "lucide-react";
 import { getStats, getOllamaStatus } from "@/lib/stats";
 import { getSetting } from "@/lib/db";
+import { Card, EmptyState, PageHeader } from "@/components/ui";
 
 export const instant = false;
 
@@ -29,10 +38,10 @@ function StatCard({
 
 function ModelRow({ name, ready }: { name: string; ready: boolean }) {
   return (
-    <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-sm">
-      <span className="font-medium text-slate-700">{name}</span>
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-4 py-3 text-sm">
+      <span className="min-w-0 truncate font-medium text-slate-700">{name}</span>
       <span
-        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+        className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${
           ready ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
         }`}
       >
@@ -42,9 +51,16 @@ function ModelRow({ name, ready }: { name: string; ready: boolean }) {
   );
 }
 
+const STEPS = [
+  { n: 1, label: "Unggah foto produk", href: "/upload" },
+  { n: 2, label: "Analisis gambar dengan AI", href: "/analyzer" },
+  { n: 3, label: "Buat caption dan konten", href: "/content-studio" },
+  { n: 4, label: "Susun poster promo", href: "/promo" },
+];
+
 export default async function DashboardPage() {
-    await connection();
-    const stats = getStats();
+  await connection();
+  const stats = getStats();
   const ollamaUrl = getSetting("ollama_url");
   const visionModel = getSetting("vision_model");
   const textModel = getSetting("text_model");
@@ -55,12 +71,26 @@ export default async function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
-      <header>
-        <h1 className="text-2xl font-bold text-slate-900">Overview</h1>
-        <p className="text-sm text-slate-500">
-          Ringkasan aktivitas dan status AI di AUTOfEEDS.
-        </p>
-      </header>
+      <PageHeader
+        title="Overview"
+        description="Ringkasan aktivitas dan status AI di AUTOfEEDS."
+        actions={
+          <>
+            <Link
+              href="/upload"
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+            >
+              <Upload size={16} /> Unggah
+            </Link>
+            <Link
+              href="/promo"
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+            >
+              <Megaphone size={16} /> Buat promo
+            </Link>
+          </>
+        }
+      />
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total Gambar" value={stats.totalImages} icon={ImageIcon} />
@@ -73,36 +103,64 @@ export default async function DashboardPage() {
         <StatCard label="Analisis AI" value={stats.totalAnalyses} icon={ScanSearch} />
       </section>
 
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 lg:col-span-2">
-          <h2 className="mb-4 text-lg font-semibold text-slate-900">
-            Aktivitas Terbaru
-          </h2>
-          {stats.recent.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              Belum ada aktivitas. Mulai dengan mengunggah gambar.
-            </p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {stats.recent.map((a) => (
-                <li key={a.id} className="flex items-center justify-between py-3 text-sm">
-                  <span className="font-medium text-slate-700">{a.action}</span>
-                  <span className="text-slate-400">{a.created_at}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {stats.totalImages === 0 && (
+        <Card>
+          <h2 className="mb-4 text-lg font-semibold text-slate-900">Mulai dari sini</h2>
+          <ol className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {STEPS.map((s) => (
+              <li key={s.n}>
+                <Link
+                  href={s.href}
+                  className="flex h-full items-center gap-3 rounded-xl bg-slate-50 p-4 text-sm font-medium text-slate-700 hover:bg-indigo-50 hover:text-indigo-700"
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">
+                    {s.n}
+                  </span>
+                  {s.label}
+                </Link>
+              </li>
+            ))}
+          </ol>
+        </Card>
+      )}
 
-        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <h2 className="mb-4 text-lg font-semibold text-slate-900">Aktivitas Terbaru</h2>
+          {stats.recent.length === 0 ? (
+            <EmptyState
+              title="Belum ada aktivitas"
+              description="Mulai dengan mengunggah gambar produk."
+              href="/upload"
+              actionLabel="Unggah gambar"
+            />
+          ) : (
+            <>
+              <ul className="divide-y divide-slate-100">
+                {stats.recent.map((a) => (
+                  <li key={a.id} className="flex items-center justify-between gap-4 py-3 text-sm">
+                    <span className="min-w-0 truncate font-medium text-slate-700">{a.action}</span>
+                    <span className="shrink-0 text-slate-400">{a.created_at}</span>
+                  </li>
+                ))}
+              </ul>
+              <Link
+                href="/history"
+                className="mt-3 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+              >
+                Lihat semua riwayat
+              </Link>
+            </>
+          )}
+        </Card>
+
+        <Card>
           <h2 className="mb-4 text-lg font-semibold text-slate-900">Status AI</h2>
           <div className="mb-4 flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-sm">
             <span className="font-medium text-slate-700">Koneksi Ollama</span>
             <span
               className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                ollama.online
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-rose-100 text-rose-700"
+                ollama.online ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
               }`}
             >
               {ollama.online ? "Terhubung" : "Tidak aktif"}
@@ -114,11 +172,17 @@ export default async function DashboardPage() {
           </div>
           {!ollama.online && (
             <p className="mt-4 text-xs text-slate-500">
-              Ollama tidak terdeteksi. Buka aplikasi Ollama dari menu Start,
-              lalu muat ulang halaman ini.
+              Ollama tidak terdeteksi. Buka aplikasi Ollama dari menu Start, lalu muat ulang
+              halaman ini.
             </p>
           )}
-        </div>
+          <Link
+            href="/settings"
+            className="mt-4 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+          >
+            Ubah pengaturan AI
+          </Link>
+        </Card>
       </section>
     </div>
   );

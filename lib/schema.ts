@@ -70,6 +70,35 @@ CREATE TABLE IF NOT EXISTS promo_designs (
   output_filename TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Fase 1: tabel untuk desain berbasis layer dan Brand Kit (dipakai fase 2-7)
+CREATE TABLE IF NOT EXISTS designs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  format TEXT NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  style TEXT,
+  doc_json TEXT NOT NULL,
+  thumb_filename TEXT,
+  is_saved INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS brand_kits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  logo_filename TEXT,
+  primary_color TEXT NOT NULL DEFAULT '#dc2626',
+  secondary_color TEXT NOT NULL DEFAULT '#1e293b',
+  accent_color TEXT NOT NULL DEFAULT '#facc15',
+  font_family TEXT NOT NULL DEFAULT 'Arial',
+  footer_text TEXT,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_designs_created ON designs(created_at);
 CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at);
 CREATE INDEX IF NOT EXISTS idx_images_category ON images(category_id);
 CREATE INDEX IF NOT EXISTS idx_analysis_image ON image_analysis(image_id);
