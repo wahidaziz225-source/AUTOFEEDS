@@ -1,9 +1,11 @@
+import colorsys
 import json
 import math
+import os
 import re
 import sys
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 Image.MAX_IMAGE_PIXELS = 100_000_000
 
@@ -26,9 +28,10 @@ PLANS = {
     "square": {1: [1], 2: [2], 3: [2, 1], 4: [2, 2], 5: [3, 2], 6: [3, 3]},
     "story": {1: [1], 2: [1, 1], 3: [1, 1, 1], 4: [2, 2], 5: [2, 2, 1], 6: [2, 2, 2]},
 }
-FONT_IMPACT = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf"]
-FONT_BOLD = ["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "arialbd.ttf"]
-FONT_REG = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "arial.ttf"]
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+FONT_IMPACT = [os.path.join(FONT_DIR, "Montserrat-ExtraBold.ttf"), "C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf"]
+FONT_BOLD = [os.path.join(FONT_DIR, "Montserrat-Bold.ttf"), "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "arialbd.ttf"]
+FONT_REG = [os.path.join(FONT_DIR, "Montserrat-Medium.ttf"), "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "arial.ttf"]
 
 NAME_COLOR = (30, 41, 59)
 GREY = (100, 116, 139)
@@ -127,7 +130,20 @@ def decorate(base, W, H):
         r = int(W * fr)
         cxx, cyy = int(W * fx), int(H * fy)
         dl.ellipse([cxx - r, cyy - r, cxx + r, cyy + r], fill=(255, 255, 255, a))
-    return Image.alpha_composite(base, layer)
+        out = Image.alpha_composite(base, layer)
+
+    # cahaya lembut di atas judul
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse([W * 0.1, -H * 0.1, W * 0.9, H * 0.35], fill=(255, 255, 255, 70))
+    out = Image.alpha_composite(out, glow.filter(ImageFilter.GaussianBlur(W // 8)))
+
+    # vignette tipis di tepi
+    vig = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(vig).ellipse([-W * 0.25, -H * 0.15, W * 1.25, H * 1.15], fill=255)
+    vig = ImageOps.invert(vig.filter(ImageFilter.GaussianBlur(W // 6)))
+    shade = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    shade.putalpha(vig.point(lambda v: int(v * 70 / 255)))
+    return Image.alpha_composite(out, shade)
 
 
 def load_product(path):
@@ -190,6 +206,97 @@ def draw_text_block(d, x, y, w, h, item, c1, accent, centered, stack):
                         radius=pill_h // 2, fill=c1)
     d.text((pill_x + px - tb[0], pill_y + py - tb[1]), price, font=pf, fill=accent)
 
+def gentle_levels(im, cut=0.005):
+    """Meratakan terang-gelap secara halus (tanpa menggeser warna)."""
+    hist = im.convert("L").histogram()
+    total = sum(hist)
+    lo = hi = None
+    acc = 0
+    for i, v in enumerate(hist):
+        acc += v
+        if acc >= total * cut:
+            lo = i
+            break
+    acc = 0
+    for i in range(255, -1, -1):
+        acc += hist[i]
+        if acc >= total * cut:
+            hi = i
+            break
+    if lo is None or hi is None or hi - lo < 60:
+        return im
+    lo, hi = min(lo, 40), max(hi, 215)  # batasi supaya tetap natural
+    scale = 255.0 / (hi - lo)
+    lut = [max(0, min(255, int((i - lo) * scale))) for i in range(256)]
+    return im.point(lut * 3)
+
+
+def enhance_photo(im):
+    im = gentle_levels(im)
+    im = ImageEnhance.Color(im).enhance(1.08)
+    return ImageEnhance.Contrast(im).enhance(1.03)
+
+
+def rounded_mask(size, radius, ss=4):
+    """Mask sudut membulat yang halus (digambar besar lalu dikecilkan)."""
+    w, h = size
+    m = Image.new("L", (w * ss, h * ss), 0)
+    ImageDraw.Draw(m).rounded_rectangle([0, 0, w * ss - 1, h * ss - 1], radius=radius * ss, fill=255)
+    return m.resize((w, h), Image.Resampling.LANCZOS)
+
+
+def paste_photo(canvas, box, path, radius):
+    bx, by, bw, bh = box
+    try:
+        src = enhance_photo(load_product(path))
+    except Exception:
+        return
+    # latar panel: foto yang sama, diburamkan dan dicerahkan
+    panel = ImageOps.fit(src, (bw, bh), Image.Resampling.BILINEAR)
+    panel = panel.filter(ImageFilter.GaussianBlur(max(8, bw // 25)))
+    panel = Image.blend(panel, Image.new("RGB", (bw, bh), (255, 255, 255)), 0.35)
+
+    fg = ImageOps.contain(src, (bw, bh), Image.Resampling.LANCZOS)
+    fg = ImageEnhance.Sharpness(fg).enhance(1.12)
+    fx, fy = (bw - fg.width) // 2, (bh - fg.height) // 2
+    fm = rounded_mask(fg.size, max(4, int(min(fg.size) * 0.05)))
+
+    # bayangan lembut di bawah foto
+    sh = Image.new("L", (bw, bh), 0)
+    sh.paste(fm.point(lambda v: int(v * 0.35)), (fx, fy + max(3, bh // 60)))
+    sh = sh.filter(ImageFilter.GaussianBlur(max(4, bh // 50)))
+    panel = Image.composite(Image.new("RGB", (bw, bh), (20, 20, 30)), panel, sh)
+
+    panel.paste(fg, (fx, fy), fm)
+    canvas.paste(panel, (bx, by), rounded_mask((bw, bh), radius))
+
+
+def theme_from_photo(path):
+    """Tema otomatis dari warna dominan foto produk pertama."""
+    try:
+        im = load_product(path).resize((96, 96))
+        pal = im.quantize(colors=8).convert("RGB").getcolors(96 * 96)
+    except Exception:
+        return THEMES["merah"]
+    best, best_score = None, -1
+    for count, (r, g, b) in pal:
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        if v < 0.25 or (s < 0.25 and v > 0.7):
+            continue  # lewati hampir hitam atau putih/abu
+        score = s * (count ** 0.5)
+        if score > best_score:
+            best, best_score = (h, s), score
+    if not best:
+        return THEMES["merah"]
+    h, s = best
+
+    def hsv(hh, ss, vv):
+        return tuple(int(c * 255) for c in colorsys.hsv_to_rgb(hh, ss, vv))
+
+    main = hsv(h, max(0.65, min(1, s)), 0.82)
+    dark = hsv(h, max(0.7, min(1, s)), 0.5)
+    accent = (255, 255, 255) if 0.10 <= h <= 0.18 else (255, 214, 10)
+    return main, dark, accent
 
 def draw_card(canvas, d, x, y, w, h, item, c1, c2, accent, badge):
     radius = int(min(w, h) * 0.06)
@@ -210,11 +317,7 @@ def draw_card(canvas, d, x, y, w, h, item, c1, c2, accent, badge):
         tw, th = w - 2 * pad, h - (2 * pad + img_h) - pad // 2
         centered, stack = True, True
 
-    try:
-        im = ImageOps.contain(load_product(item["path"]), (box[2], box[3]), Image.Resampling.LANCZOS)
-        canvas.paste(im, (box[0] + (box[2] - im.width) // 2, box[1] + (box[3] - im.height) // 2))
-    except Exception:
-        pass
+        paste_photo(canvas, box, item["path"], int(min(box[2], box[3]) * 0.06))
 
     draw_text_block(d, tx, ty, tw, th, item, c1, accent, centered, stack)
 
@@ -248,10 +351,12 @@ def main():
     out = sys.argv[2]
     fmt = spec["format"]
     W, H = FORMATS[fmt]
-    c1, c2, accent = THEMES[spec["theme"]]
-    canvas = decorate(gradient((W, H), c1, c2).convert("RGBA"), W, H)
-
     items = spec["items"]
+    if spec["theme"] == "auto":
+        c1, c2, accent = theme_from_photo(items[0]["path"])
+    else:
+        c1, c2, accent = THEMES[spec["theme"]]
+    canvas = decorate(gradient((W, H), c1, c2).convert("RGBA"), W, H)
     n = len(items)
     landscape = W > H
     margin = int(W * 0.05)

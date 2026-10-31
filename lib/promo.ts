@@ -18,6 +18,13 @@ export type PromoSpec = {
   subtitle: string;
   footer: string;
   badge: string;
+  promo_type: string;
+  discount: string;
+  buy_qty: string;
+  free_qty: string;
+  min_qty: string;
+  bundle_price: string;
+  bundle_label: string;
   items: { path: string; name: string; price: string; old_price: string }[];
 };
 

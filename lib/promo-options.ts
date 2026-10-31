@@ -13,4 +13,5 @@ export const PROMO_THEMES = [
   { id: "ungu", label: "Ungu", hex: "#7c3aed" },
   { id: "oranye", label: "Oranye", hex: "#f97316" },
   { id: "hijau", label: "Hijau", hex: "#16a34a" },
+    { id: "auto", label: "Otomatis (dari foto)", hex: "#64748b" },
 ] as const;
