@@ -45,9 +45,9 @@ class CreativeLayoutTests(unittest.TestCase):
             original = source.read_bytes()
             item = dict(path=str(source), name='Nugget Ayam Original 500 gram',
                         price_text='Rp24.799', old_text='Rp30.999', tag='-20%')
-            for style, (fmt, dims), mode in itertools.product(STYLES, FORMATS.items(), ('items', 'bundle')):
-                with self.subTest(style=style, format=fmt, mode=mode):
-                    spec = dict(format=fmt, style=style, theme='merah', seed=42,
+            for style, (fmt, dims), mode, flip in itertools.product(STYLES, FORMATS.items(), ('items', 'bundle'), (0, 1)):
+                with self.subTest(style=style, format=fmt, mode=mode, flip=flip):
+                    spec = dict(format=fmt, style=style, theme='merah', seed=42, layout_variant=flip,
                                 mode=mode, title='PROMO AKHIR PEKAN', subtitle='Berlaku 1–7 November',
                                 footer='ANTOFROZEN • Pesan via WhatsApp', badge='PROMO',
                                 items=[item] if mode == 'items' else [dict(item, price_text='', old_text='', tag='')]*6,

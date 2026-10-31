@@ -1,6 +1,10 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import type { BrandKit } from "@/lib/brand-options";
+import type { ImageVariant } from "@/lib/image-processing-options";
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Wand2, Download, Trash2, AlertCircle, X, Shuffle } from "lucide-react";
 import {
@@ -16,14 +20,19 @@ import {
 } from "@/lib/promo-options";
 
 type Img = { id: number; name: string };
-type Sel = { imageId: number; name: string; price: string; oldPrice: string };
-type Design = { id: number; title: string; layout_format: string; created_at: string };
+type Sel = { imageId: number; name: string; price: string; oldPrice: string; variantId: number | null };
+type Design = { id: number; title: string; layout_format: string; created_at: string; batch_id: string | null; style: string | null; is_saved: number; can_regenerate: number };
 
 const inputCls =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900";
 
 export default function PromoPage() {
+  const router = useRouter();
+  const [brandLoading,setBrandLoading] = useState(true);
+  const [brands, setBrands] = useState<BrandKit[]>([]);
+  const [brandId, setBrandId] = useState(0);
   const [images, setImages] = useState<Img[]>([]);
+  const [variants, setVariants] = useState<Record<number, ImageVariant[]>>({});
   const [sel, setSel] = useState<Sel[]>([]);
   const [type, setType] = useState<string>("harga_spesial");
   const [percent, setPercent] = useState("20");
@@ -35,12 +44,18 @@ export default function PromoPage() {
   const [subtitle, setSubtitle] = useState("");
   const [footer, setFooter] = useState("");
   const [badge, setBadge] = useState("PROMO");
+  const [customWidth,setCustomWidth]=useState(1200),[customHeight,setCustomHeight]=useState(900);
   const [format, setFormat] = useState("feed");
   const [style, setStyle] = useState("retail");
   const [theme, setTheme] = useState("acak");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [resultId, setResultId] = useState<number | null>(null);
+  const [count, setCount] = useState(4);
+  const [results, setResults] = useState<Design[]>([]);
+  const [savedDesigns, setSavedDesigns] = useState<Design[]>([]);
+  const [savedOnly, setSavedOnly] = useState(false);
+  const [notice, setNotice] = useState("");
   const [designs, setDesigns] = useState<Design[]>([]);
 
   const typeInfo = PROMO_TYPES.find((t) => t.id === type) ?? PROMO_TYPES[0];
@@ -55,11 +70,14 @@ export default function PromoPage() {
 
   const loadDesigns = useCallback(async () => {
     try {
-      const res = await fetch("/api/promo", { cache: "no-store" });
-      const data = await res.json();
-      setDesigns(data.designs ?? []);
+      const [res, savedRes] = await Promise.all([
+        fetch("/api/promo", { cache: "no-store" }), fetch("/api/promo?saved=1", { cache: "no-store" }),
+      ]);
+      const [data, savedData] = await Promise.all([res.json(), savedRes.json()]);
+      if (!res.ok || !savedRes.ok) throw new Error("Gagal memuat riwayat desain.");
+      setDesigns(data.designs ?? []); setSavedDesigns(savedData.designs ?? []);
     } catch {
-      /* riwayat desain opsional */
+      setError("Gagal memuat riwayat desain. Muat ulang halaman untuk mencoba lagi.");
     }
   }, []);
 
@@ -72,7 +90,14 @@ export default function PromoPage() {
       } catch {
         setError("Gagal memuat daftar gambar.");
       }
+      try {
+        const response = await fetch('/api/brand-kits', {cache:'no-store'}), data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Gagal memuat Brand Kit.');
+        setBrands(data.kits);const kit = data.kits.find((k:BrandKit)=>k.is_default);
+        if(kit){setBrandId(kit.id);setFormat(kit.promo_format);setStyle(kit.promo_style);setTitle(kit.promo_title);setBadge(kit.promo_badge);setFooter(kit.footer_text);}
+      } catch(e) { setError((e as Error).message); }
       await loadDesigns();
+      setBrandLoading(false);
     })();
   }, [loadDesigns]);
 
@@ -85,14 +110,20 @@ export default function PromoPage() {
     }
   }
 
-  function toggle(img: Img) {
+  async function toggle(img: Img) {
     setError("");
     if (sel.some((s) => s.imageId === img.id)) {
       setSel(sel.filter((s) => s.imageId !== img.id));
     } else if (sel.length >= MAX_PROMO_ITEMS) {
       setError(`Maksimal ${MAX_PROMO_ITEMS} produk per desain.`);
     } else {
-      setSel([...sel, { imageId: img.id, name: img.name, price: "", oldPrice: "" }]);
+      setSel([...sel, { imageId: img.id, name: img.name, price: "", oldPrice: "", variantId: null }]);
+      try {
+        const res = await fetch(`/api/image-processing?image_id=${img.id}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Gagal memuat varian foto.");
+        setVariants(current => ({ ...current, [img.id]: data.variants }));
+      } catch (e) { setError((e as Error).message); }
     }
   }
 
@@ -108,7 +139,7 @@ export default function PromoPage() {
   }
 
   async function generate() {
-    setError("");
+    setError(""); setNotice("");
     if (sel.length === 0) return setError("Pilih minimal 1 gambar.");
     if (type === "bundling") {
       if (sel.length < 2) return setError("Paket bundling butuh minimal 2 produk.");
@@ -124,6 +155,8 @@ export default function PromoPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          count,
+          brand_kit_id: brandId,
           promo_type: type,
           discount_percent: percent,
           discount_amount: amount,
@@ -135,10 +168,12 @@ export default function PromoPage() {
           footer,
           badge,
           format,
+          ...(format==="custom"?{width:customWidth,height:customHeight}:{}),
           theme,
           style,
           items: sel.map((s) => ({
             image_id: s.imageId,
+            variant_id: s.variantId,
             name: s.name,
             price: s.price,
             old_price: s.oldPrice,
@@ -148,6 +183,8 @@ export default function PromoPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Gagal membuat desain.");
       setResultId(data.id);
+      setResults(data.designs ?? []);
+      setNotice(`${data.designs?.length ?? 1} desain berhasil dibuat dan masuk riwayat. Tandai hasil terbaik sebagai pilihan.`);
       await loadDesigns();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Gagal membuat desain.");
@@ -156,13 +193,71 @@ export default function PromoPage() {
     }
   }
 
+  async function openDesign(design: Design) {
+    setResultId(design.id); setError(""); setNotice("");
+    if (!design.batch_id) { setResults([design]); return; }
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/promo?batch_id=${encodeURIComponent(design.batch_id)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Gagal membuka kelompok desain.");
+      setResults(data.designs);
+    } catch (e) { setResults([design]); setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function generateFromSaved(more: boolean) {
+    if (!resultId || busy) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const response = await fetch("/api/promo", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(more ? { source_id: resultId, count: count === 1 ? 4 : count } : { regenerate_id: resultId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Gagal membuat variasi.");
+      if (more) setResults(data.designs);
+      else setResults(current => [...current, ...data.designs]);
+      setResultId(data.id);
+      setNotice(more ? "Kelompok variasi baru dibuat dari pengaturan desain terpilih." : "Desain baru dibuat. Hasil sebelumnya tetap tersedia.");
+      await loadDesigns();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function saveDesign(design: Design) {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const response = await fetch("/api/promo", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: design.id, is_saved: !design.is_saved }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Gagal menyimpan pilihan.");
+      setResults(current => current.map(d => d.id === design.id ? { ...d, is_saved: design.is_saved ? 0 : 1 } : d));
+      setNotice(design.is_saved ? "Tanda pilihan dilepas; desain tetap tersimpan di riwayat." : "Desain ditandai sebagai pilihan.");
+      await loadDesigns();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function editDesign() {
+    if (!resultId || busy) return;
+    setBusy(true); setError("");
+    try {
+      const response = await fetch("/api/designs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ promo_id: resultId }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Gagal membuka editor.");
+      router.push(`/editor?id=${data.id}`);
+    } catch (e) { setError((e as Error).message); setBusy(false); }
+  }
+
   async function removeDesign(id: number) {
     if (!confirm("Hapus desain ini?")) return;
     try {
       const res = await fetch(`/api/promo?id=${id}`, { method: "DELETE" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Gagal menghapus.");
-      if (resultId === id) setResultId(null);
+      const remaining = results.filter(d => d.id !== id);
+      if (resultId === id) setResultId(remaining[0]?.id ?? null);
+      setResults(remaining);
       await loadDesigns();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Gagal menghapus.");
@@ -174,12 +269,15 @@ export default function PromoPage() {
     return vals.length > 0 && vals.every((v) => v) ? (vals as number[]).reduce((a, b) => a + b, 0) : null;
   })();
 
+  const selectedDesign = results.find(d => d.id === resultId) ?? designs.find(d => d.id === resultId) ?? savedDesigns.find(d => d.id === resultId);
+  const history = savedOnly ? savedDesigns : designs;
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <header>
         <h1 className="text-2xl font-bold text-slate-900">Promo Composer</h1>
         <p className="text-sm text-slate-500">
-          Pilih jenis promo dan sampai {MAX_PROMO_ITEMS} produk. Pilih satu dari enam konsep komposisi. Foto asli dan informasi produk tetap digunakan.
+          Buat 4–6 alternatif komposisi, bandingkan hasil, lalu simpan desain pilihan. Nama, harga, dan foto produk tetap mengikuti data yang Anda berikan.
         </p>
       </header>
 
@@ -189,6 +287,8 @@ export default function PromoPage() {
         </div>
       )}
 
+      {notice && <p role="status" className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">{notice}</p>}
+      <fieldset disabled={busy||brandLoading} className="min-w-0 border-0 p-0">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
           <h2 className="mb-3 text-sm font-semibold text-slate-900">
@@ -327,7 +427,7 @@ export default function PromoPage() {
                   return (
                     <li key={s.imageId} className="flex items-start gap-3 rounded-xl bg-slate-50 p-3">
                       <img
-                        src={`/api/image-file?id=${s.imageId}`}
+                        src={`/api/image-file?id=${s.imageId}${s.variantId ? `&variant_id=${s.variantId}` : ""}`}
                         alt={s.name}
                         className="h-16 w-16 shrink-0 rounded-lg object-cover"
                       />
@@ -363,6 +463,14 @@ export default function PromoPage() {
                             />
                           </label>
                         )}
+                        <label className="text-xs font-medium text-slate-500 sm:col-span-3">
+                          Foto untuk poster
+                          <select value={s.variantId ?? ""} className={inputCls} onChange={e => patch(s.imageId, { variantId: e.target.value ? Number(e.target.value) : null })}>
+                            <option value="">Foto asli</option>
+                            {(variants[s.imageId] ?? []).map(v => <option key={v.id} value={v.id}>Hasil olahan #{v.id} · {v.width}×{v.height}</option>)}
+                          </select>
+                          <Link href={`/image-studio?image_id=${s.imageId}`} className="mt-1 inline-block text-indigo-600">Olah foto / buat background →</Link>
+                        </label>
                         {pv && <div className="text-xs font-medium text-indigo-700 sm:col-span-3">{pv}</div>}
                       </div>
                       <button
@@ -384,6 +492,14 @@ export default function PromoPage() {
 
           <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <h2 className="text-sm font-semibold text-slate-900">4. Teks dan tampilan</h2>
+            <label className="block text-sm">Brand Kit
+              <select aria-label="Brand Kit" value={brandId} onChange={e=>{
+                const id=Number(e.target.value);setBrandId(id);const kit=brands.find(k=>k.id===id);
+                if(kit){setFooter(kit.footer_text);setStyle(kit.promo_style);setFormat(kit.promo_format);setTitle(kit.promo_title);setBadge(kit.promo_badge);}
+              }} className={inputCls}><option value={0}>Tanpa Brand Kit</option>{brands.map(k=><option key={k.id} value={k.id}>{k.name}{k.is_default?' (default)':''}</option>)}</select>
+            </label>
+            {brandId>0&&<p className="text-xs text-slate-500">Warna, font, dan logo diambil dari Brand Kit. Judul, footer, konsep, dan ukuran masih bisa Anda ubah untuk promo ini.</p>}
+
             <fieldset>
               <legend className="mb-2 text-xs font-medium text-slate-500">Konsep desain</legend>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -428,7 +544,7 @@ export default function PromoPage() {
               </label>
               <label className="text-xs font-medium text-slate-500">
                 Ukuran
-                <select value={format} onChange={(e) => setFormat(e.target.value)} className={inputCls}>
+                <select aria-label="Ukuran" value={format} onChange={(e) => setFormat(e.target.value)} className={inputCls}>
                   {PROMO_FORMATS.map((f) => (
                     <option key={f.id} value={f.id}>
                       {f.label}
@@ -436,6 +552,7 @@ export default function PromoPage() {
                   ))}
                 </select>
               </label>
+              {format==='custom'&&<div className="grid grid-cols-2 gap-2"><label className="text-xs">Lebar (px)<input aria-label="Lebar poster khusus" type="number" min="512" max="4096" value={customWidth} onChange={e=>setCustomWidth(Number(e.target.value))} className={inputCls}/></label><label className="text-xs">Tinggi (px)<input aria-label="Tinggi poster khusus" type="number" min="512" max="4096" value={customHeight} onChange={e=>setCustomHeight(Number(e.target.value))} className={inputCls}/></label><p className="text-xs text-slate-500 col-span-2">512–4096 px per sisi; rasio 1:3 sampai 3:1.</p></div>}
               <div>
                 <div className="text-xs font-medium text-slate-500">Warna tema</div>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -443,6 +560,7 @@ export default function PromoPage() {
                     <button
                       key={t.id}
                       title={t.label}
+                      disabled={brandId>0}
                       onClick={() => setTheme(t.id)}
                       style={{ background: t.bg }}
                       className={`h-9 w-9 rounded-full ring-2 ring-offset-2 transition ${
@@ -456,6 +574,13 @@ export default function PromoPage() {
                 </div>
               </div>
             </div>
+            <label className="block text-sm font-medium text-slate-700">Jumlah desain
+              <select value={count} onChange={e => setCount(Number(e.target.value))} className={inputCls}>
+                <option value={1}>1 desain (konsep terpilih)</option>
+                <option value={4}>4 variasi</option><option value={5}>5 variasi</option><option value={6}>6 variasi</option>
+              </select>
+            </label>
+            <p className="text-xs text-slate-500">Konsep terpilih menjadi desain pertama; variasi lain memakai konsep berbeda. Proses dijalankan berurutan dan dapat memerlukan waktu lebih lama untuk beberapa produk.</p>
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={generate}
@@ -463,35 +588,42 @@ export default function PromoPage() {
                 className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-60"
               >
                 {busy ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                {busy ? "Menyusun desain..." : "Buat visual promo"}
+                {busy ? "Menyusun desain…" : count === 1 ? "Buat visual promo" : `Buat ${count} variasi desain`}
               </button>
-              {resultId != null && (
-                <button
-                  onClick={generate}
-                  disabled={busy}
-                  className="flex items-center gap-2 rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-200 disabled:opacity-60"
-                >
-                  <Shuffle size={16} /> Buat variasi lain
-                </button>
-              )}
+
             </div>
           </div>
 
           {resultId != null && (
             <div className="space-y-3 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-              <h2 className="text-sm font-semibold text-slate-900">Hasil</h2>
+              <h2 className="text-sm font-semibold text-slate-900">Hasil terpilih #{resultId}</h2>
+              {results.length > 0 && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {results.map(d => <button type="button" key={d.id} onClick={() => setResultId(d.id)} aria-pressed={resultId === d.id}
+                  className={`overflow-hidden rounded-xl border-2 text-left ${resultId === d.id ? "border-indigo-600" : "border-slate-200"}`}>
+                  <img src={`/api/promo-file?id=${d.id}`} alt={`Alternatif ${d.id}`} className="h-40 w-full bg-slate-50 object-contain" />
+                  <span className="block p-2 text-xs font-medium">{PROMO_STYLES.find(s => s.id === d.style)?.label ?? "Desain lama"}{d.is_saved ? " ★" : ""}</span>
+                </button>)}
+              </div>}
+              <p className="text-xs text-slate-500">Klik alternatif untuk membandingkan. Membuat ulang atau variasi tambahan menggunakan pengaturan tersimpan, termasuk pilihan foto olahan.</p>
               <img
                 src={`/api/promo-file?id=${resultId}`}
                 alt="Hasil desain promo"
                 className="mx-auto max-h-[40rem] w-auto rounded-xl ring-1 ring-slate-200"
               />
-              <div className="flex gap-2 text-sm font-medium">
+              <div className="flex flex-wrap gap-2 text-sm font-medium">
+                {selectedDesign && <button onClick={() => saveDesign(selectedDesign)} className="rounded-lg border border-indigo-200 px-4 py-2 text-indigo-700">{selectedDesign.is_saved ? "Lepas tanda pilihan" : "Simpan desain pilihan"}</button>}
+                {selectedDesign?.can_regenerate === 1 && <>
+                  <button onClick={editDesign} className="rounded-lg bg-indigo-600 px-4 py-2 text-white">Edit desain (salinan)</button>
+                  <button onClick={() => generateFromSaved(false)} className="rounded-lg bg-slate-100 px-4 py-2 text-slate-700">Buat ulang desain terpilih</button>
+                  <button onClick={() => generateFromSaved(true)} className="flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-2 text-slate-700"><Shuffle size={16} />Buat variasi tambahan</button>
+                </>}
                 <a
                   href={`/api/promo-file?id=${resultId}&download=1`}
                   className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
                 >
                   <Download size={16} /> Unduh JPG
                 </a>
+                <a href={`/api/promo-file?id=${resultId}&format=png&download=1`} className="flex items-center gap-2 rounded-lg border border-indigo-200 px-4 py-2 text-indigo-700"><Download size={16}/>Unduh PNG</a>
                 <button
                   onClick={() => removeDesign(resultId)}
                   className="flex items-center gap-2 rounded-lg px-4 py-2 text-rose-600 hover:bg-rose-50"
@@ -504,14 +636,21 @@ export default function PromoPage() {
         </section>
       </div>
 
+      </fieldset>
+
       {designs.length > 0 && (
         <section>
-          <h2 className="mb-3 text-lg font-semibold text-slate-900">Desain sebelumnya ({designs.length})</h2>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-slate-900">Riwayat desain ({history.length})</h2>
+            <label className="flex gap-2 text-sm"><input type="checkbox" checked={savedOnly} onChange={e => setSavedOnly(e.target.checked)} />Hanya desain pilihan</label>
+          </div>
+          {savedOnly && !history.length && <p className="mb-4 text-sm text-slate-500">Belum ada desain yang ditandai sebagai pilihan.</p>}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-6">
-            {designs.map((d) => (
+            {history.map((d) => (
               <button
                 key={d.id}
-                onClick={() => setResultId(d.id)}
+                disabled={busy}
+                onClick={() => openDesign(d)}
                 className="overflow-hidden rounded-xl bg-white text-left shadow-sm ring-1 ring-slate-200 hover:ring-indigo-400"
               >
                 <img

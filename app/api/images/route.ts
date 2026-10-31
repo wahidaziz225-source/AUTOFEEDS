@@ -6,6 +6,7 @@ import {
   saveImage,
   validateImage,
 } from "@/lib/storage";
+import { deleteProcessedFile, processingImageId } from "@/lib/image-processing";
 import { deleteAiCopy, processImage } from "@/lib/image-tools";
 
 // Daftar semua gambar
@@ -93,6 +94,9 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "ID tidak valid." }, { status: 400 });
   }
 
+  if (processingImageId() === id) {
+    return NextResponse.json({ error: "Foto sedang diproses. Tunggu sebelum menghapus." }, { status: 409 });
+  }
   const db = getDb();
   const row = db
     .prepare("SELECT name, stored_filename FROM images WHERE id = ?")
@@ -102,6 +106,8 @@ export async function DELETE(req: Request) {
   }
 
   try {
+    const variants = db.prepare("SELECT stored_filename FROM image_variants WHERE image_id = ?").all(id) as { stored_filename: string }[];
+    for (const variant of variants) deleteProcessedFile(variant.stored_filename);
     deleteImageFile(row.stored_filename);
     deleteAiCopy(row.stored_filename);
     db.prepare("DELETE FROM images WHERE id = ?").run(id);

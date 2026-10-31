@@ -1,7 +1,16 @@
-Paket pembaruan Fase 3 untuk baseline f8159df.
-Backup folder proyek, database dan storage terlebih dahulu.
-Ekstrak paket, lalu salin file sesuai struktur folder ke proyek AUTOFEEDS Anda.
-Alternatif pengguna Git: git apply --check AUTOFEEDS-fase3.patch lalu git apply AUTOFEEDS-fase3.patch
-Jalankan npm ci dan python -m pip install -r requirements.txt, lalu npm run dev.
-Lihat docs/AUDIT-FASE-3.md untuk audit dan batas implementasi.
-Paket ini berisi file perubahan, bukan aplikasi lengkap.
+AUTOFEEDS - FASE 8
+
+Buka PANDUAN-AUTOFEEDS-fase8.html untuk panduan bergambar dan perbandingan fitur.
+
+UPDATE: Cadangkan folder database dan storage aplikasi lama. Salin kode baru tanpa menimpa data tersebut.
+WINDOWS: Jalankan 1-INSTAL-WINDOWS.bat, lalu 2-MULAI-WINDOWS.bat. Tunggu Ready dan buka http://localhost:3000.
+MANUAL: Lihat README.md untuk instalasi dan konfigurasi.
+
+BARU: PNG Composer dan editor, kualitas JPG, kanvas kustom 512-4096 piksel (rasio 1:3 sampai 3:1), perbaikan tata letak harga, peluncur Windows.
+ALUR: Unggah produk -> olah gambar -> isi harga di Composer -> buat variasi -> Edit salinan -> Simpan -> unduh JPG/PNG/SVG.
+PNG transparan di editor memerlukan layer Background disembunyikan. Ekspor tidak otomatis menyimpan desain.
+
+VALIDASI: 48 tes unit lulus, build/lint/TypeScript lulus, uji browser dan regresi fitur sebelumnya lulus. Gambar contoh adalah DEMO.
+BATAS: Peluncur belum diuji pada Windows asli. Pengujian teks menggunakan fixture HTTP, bukan kualitas model bahasa nyata. Konversi PNG dari JPG lama tidak mengembalikan detail yang hilang.
+
+Kode kumulatif termasuk fase sebelumnya. Perubahan belum dipublikasikan ke GitHub.

@@ -10,6 +10,7 @@ export const PROMO_STYLES = [
 export const MAX_PROMO_ITEMS = 6;
 
 export const PROMO_FORMATS = [
+  { id: "custom", label: "Ukuran khusus (512–4096 px)" },
   { id: "feed", label: "Feed Instagram 4:5 (1080×1350)" },
   { id: "square", label: "Persegi 1:1 (1080×1080)" },
   { id: "story", label: "Story / Reels 9:16 (1080×1920)" },

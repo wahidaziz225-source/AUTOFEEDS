@@ -5,6 +5,7 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from creative_layout import plan as creative_plan, STYLES
+from layer_recorder import LayerRecorder, RecordedDraw
 
 Image.MAX_IMAGE_PIXELS = 100_000_000
 
@@ -59,7 +60,10 @@ def fit_font(d, text, paths, max_w, start, min_size):
         if d.textlength(text, font=f) <= max_w:
             return f
         size -= 2
-    return load_font(paths, min_size)
+    f=load_font(paths,min_size)
+    while size>2 and d.textlength(text,font=f)>max_w:
+        size-=1;f=load_font(paths,size)
+    return f
 
 
 def wrap(d, text, font, max_w, max_lines):
@@ -142,12 +146,7 @@ def load_product(path):
     with Image.open(path) as im:
         im.load()
         im = ImageOps.exif_transpose(im)
-        if im.mode in ("RGBA", "LA", "P"):
-            im = im.convert("RGBA")
-            bg = Image.new("RGB", im.size, WHITE)
-            bg.paste(im, mask=im.split()[-1])
-            return bg
-        return im.convert("RGB")
+        return im.convert("RGBA")
 
 
 def cx_of(d, text, font, x, w, centered):
@@ -164,7 +163,7 @@ def strike_text(d, x, y, text, font, color):
 def draw_tag(d, x, y, w, h, text, st, pad):
     if not text:
         return
-    c2, accent = st["c2"], st["accent"]
+    c2, accent = st.get("tag_ink", st["c2"]), st["accent"]
     if len(text) <= 6:
         r = int(min(w, h) * 0.12)
         cx, cy = x + w - r - pad // 2, y + r + pad // 2
@@ -187,53 +186,45 @@ def draw_tag(d, x, y, w, h, text, st, pad):
 
 
 def draw_text_block(d, x, y, w, h, item, st, centered, stack):
-    nf_size = max(16, min(40, int(h * 0.14)))
-    max_lines = 3 if st.get("hero") else 2
-    nf = load_font(F_BOLD, nf_size)
-    lines = wrap(d, item["name"], nf, w, max_lines)
-    while " ".join(lines) != " ".join(item["name"].split()) and nf_size > 12:
-        nf_size -= 2
-        nf = load_font(F_BOLD, nf_size)
-        lines = wrap(d, item["name"], nf, w, max_lines)
-    line_h = int(nf_size * 1.2)
-
-    price = item.get("price_text") or ""
-    old = item.get("old_text") or ""
-    of, old_h = None, 0
-    if old and price:
-        of = fit_font(d, old, F_REG, w, max(14, int(h * 0.11)), 12)
-        old_h = int(of.size * 1.3)
-
-    pf, tb, px, py, pill_w, pill_h = None, (0, 0, 0, 0), 0, 0, 0, 0
-    if price:
-        pf = fit_font(d, price, F_IMPACT, int(w * 0.84), max(24, int(h * 0.24)), 16)
-        tb = d.textbbox((0, 0), price, font=pf)
-        px, py = int(pf.size * 0.35), int(pf.size * 0.22)
-        pill_w, pill_h = (tb[2] - tb[0]) + 2 * px, (tb[3] - tb[1]) + 2 * py
-
-    gap1, gap2 = int(h * 0.02), int(h * 0.03)
-    total = len(lines) * line_h + (gap1 + old_h + gap2 + pill_h if price else 0)
-    ly = y if stack else y + max(0, (h - total) // 2)
-
+    # Allocate the available box before choosing fonts; preserve the complete price.
+    price,old=item.get('price_text') or '',item.get('old_text') or ''
+    gap=max(1,h*.025)
+    name_budget=h*(.42 if old and price else .52 if price else .94)
+    old_budget=h*.16 if old and price else 0
+    price_budget=max(1,h-name_budget-old_budget-3*gap) if price else 0
+    max_lines=3 if st.get('hero') else 2
+    nf_size=max(2,min(40,int(name_budget/max_lines/1.2)))
+    nf=load_font(F_BOLD,nf_size)
+    lines=wrap(d,item['name'],nf,max(1,w),max_lines)
+    while nf_size>2 and (' '.join(lines)!=' '.join(item['name'].split()) or len(lines)*nf_size*1.2>name_budget):
+        nf_size-=1;nf=load_font(F_BOLD,nf_size);lines=wrap(d,item['name'],nf,max(1,w),max_lines)
+    line_h=nf_size*1.2
+    of=fit_font(d,old,F_REG,w,max(2,int(old_budget*.75)),2) if old_budget else None
+    old_h=of.size*1.3 if of else 0
+    pf=fit_font(d,price,F_IMPACT,max(1,w*.84),max(2,int(price_budget*.78)),2) if price else None
+    tb=(0,0,0,0);px=py=pill_w=pill_h=0
+    if pf:
+        while True:
+            tb=d.textbbox((0,0),price,font=pf)
+            px,py=max(1,int(pf.size*.35)),max(1,int(pf.size*.22))
+            pill_w,pill_h=tb[2]-tb[0]+2*px,tb[3]-tb[1]+2*py
+            if (pill_h<=price_budget and pill_w<=w) or pf.size<=2:break
+            pf=load_font(F_IMPACT,pf.size-1)
+    total=len(lines)*line_h+(gap+old_h+gap+pill_h if price else 0)
+    ly=y if stack else y+max(0,(h-total)/2)
     for ln in lines:
-        d.text((cx_of(d, ln, nf, x, w, centered), ly), ln, font=nf, fill=NAME_COLOR)
-        ly += line_h
-    if not price:
-        return
-    ly += gap1
-    if old and of:
-        strike_text(d, cx_of(d, old, of, x, w, centered), ly, old, of, GREY)
-        ly += old_h
-    ly += gap2
-
-    pill_y = (y + h - pill_h) if stack else ly
-    pill_x = x + (w - pill_w) / 2 if centered else x
-    style = st["pill"]
-    radius = pill_h // 2 if style == "pill" else int(pill_h * (0.18 if style == "rect" else 0.32))
-    outline = st["accent"] if style == "tag" else None
-    d.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
-                        radius=radius, fill=st["c1"], outline=outline, width=4 if outline else 0)
-    d.text((pill_x + px - tb[0], pill_y + py - tb[1]), price, font=pf, fill=st["accent"])
+        d.text((cx_of(d,ln,nf,x,w,centered),ly),ln,font=nf,fill=NAME_COLOR);ly+=line_h
+    if not price:return
+    ly+=gap
+    if of:
+        strike_text(d,cx_of(d,old,of,x,w,centered),ly,old,of,GREY);ly+=old_h
+    ly+=gap
+    pill_y=y+h-pill_h if stack else ly
+    pill_x=x+(w-pill_w)/2 if centered else x
+    style=st['pill'];radius=pill_h/2 if style=='pill' else pill_h*(.18 if style=='rect' else .32)
+    outline=st['accent'] if style=='tag' else None
+    d.rounded_rectangle([pill_x,pill_y,pill_x+pill_w,pill_y+pill_h],radius=radius,fill=st['c1'],outline=outline,width=min(4,max(1,int(pill_h/8))) if outline else 0)
+    d.text((pill_x+px-tb[0],pill_y+py-tb[1]),price,font=pf,fill=st.get('price_ink',st['accent']))
 
 
 def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
@@ -276,12 +267,27 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
         tw, th = w - 2 * pad, h - (2 * pad + img_h) - pad // 2
         centered, stack = True, True
 
+    if st.get("flip") and st.get("hero"):
+        box = (x + w - (box[0] - x) - box[2], box[1], box[2], box[3])
+        tx = x + w - (tx - x) - tw
+
     try:
         im = ImageOps.contain(load_product(item["path"]), (box[2], box[3]), Image.Resampling.LANCZOS)
-        canvas.paste(im, (box[0] + (box[2] - im.width) // 2, box[1] + (box[3] - im.height) // 2))
+        ix, iy = box[0] + (box[2] - im.width) // 2, box[1] + (box[3] - im.height) // 2
+        canvas.alpha_composite(im, (ix, iy))
+        if isinstance(d, RecordedDraw):
+            d.recorder.image(load_product(item["path"]), "Foto produk: " + item["name"], ix, iy, im.width, im.height)
     except Exception as exc:
         raise ValueError("Foto produk gagal dibaca") from exc
 
+    tag = item.get('tag') or ''
+    if tag and len(tag)<=6:
+        tag_radius=int(min(w,h)*.12)
+        tag_left=x+w-2*tag_radius-pad//2
+        tag_bottom=y+2*tag_radius+pad//2
+        if tx+tw>tag_left and ty<tag_bottom:
+            reserve=max(0,tag_bottom+max(4,int(pad*.2))-ty)
+            if th-reserve>8:ty+=reserve;th-=reserve
     draw_text_block(d, tx, ty, tw, th, item, st, centered, stack)
 
     tag = item.get("tag") or ""
@@ -295,11 +301,11 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
         bx, by = x + pad, y + pad
         d.rounded_rectangle([bx, by, bx + bw + 2 * px, by + bh + 2 * py],
                             radius=(bh + 2 * py) // 2, fill=st["c1"])
-        d.text((bx + px - bb[0], by + py - bb[1]), badge, font=bf, fill=WHITE)
+        d.text((bx + px - bb[0], by + py - bb[1]), badge, font=bf, fill=st.get("primary_ink", WHITE))
 
 
 def draw_bundle_panel(d, x, y, w, h, bundle, st):
-    c2, accent = st["c2"], st["accent"]
+    c2, accent = st.get("tag_ink", st["c2"]), st["accent"]
     d.rounded_rectangle([x, y, x + w, y + h], radius=int(h * 0.18), fill=accent, outline=WHITE, width=5)
     pad = int(h * 0.12)
     left_w = int(w * 0.44)
@@ -328,13 +334,35 @@ def draw_bundle_panel(d, x, y, w, h, bundle, st):
     d.text((rx + (rw - (pb[2] - pb[0])) / 2 - pb[0], ry + old_h - pb[1]), price, font=pf, fill=c2)
 
 
+def luminance(color):
+    values=[v/255 for v in color[:3]]
+    values=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in values]
+    return .2126*values[0]+.7152*values[1]+.0722*values[2]
+
+
+def contrast(a,b):
+    high,low=sorted((luminance(a),luminance(b)),reverse=True)
+    return (high+.05)/(low+.05)
+
+
+def ink_on(color):
+    return (15,23,42) if luminance(color)>.179 else WHITE
+
+
 def main():
+    global F_REG, F_BOLD, F_IMPACT, F_BLACK
     spec = json.load(open(sys.argv[1], encoding="utf-8"))
     out = sys.argv[2]
+    recorder = LayerRecorder(sys.argv[3]) if len(sys.argv) > 3 else None
     rng = random.Random(spec.get("seed", 1))
 
     fmt = spec["format"]
-    W, H = FORMATS[fmt]
+    if fmt=='custom':
+        W,H=spec.get('width'),spec.get('height')
+        if isinstance(W,bool) or isinstance(H,bool) or not isinstance(W,int) or not isinstance(H,int) or not 512<=W<=4096 or not 512<=H<=4096 or not 1/3<=W/H<=3:
+            raise ValueError('Ukuran khusus harus 512–4096 px, rasio 1:3 sampai 3:1.')
+    else:
+        W,H=FORMATS[fmt]
     style = spec.get("style", "retail")
     if style not in STYLES:
         raise ValueError("Konsep tidak valid")
@@ -342,6 +370,24 @@ def main():
     if theme not in THEMES:
         theme = rng.choice(list(THEMES))
     c1, c2, accent = THEMES[theme]
+    brand = spec.get('brand')
+    logo = None
+    if brand:
+        def rgb(value):
+            return tuple(int(value[i:i+2],16) for i in (1,3,5))
+        c1,c2,accent = (rgb(brand[key]) for key in ('primary_color','secondary_color','accent_color'))
+        families = {
+            'Arial': ('arial.ttf','arialbd.ttf'), 'Impact': ('impact.ttf','impact.ttf'),
+            'Georgia': ('georgia.ttf','georgiab.ttf'), 'Verdana': ('verdana.ttf','verdanab.ttf'),
+            'Courier New': ('cour.ttf','courbd.ttf'), 'DejaVu Sans': ('DejaVuSans.ttf','DejaVuSans-Bold.ttf'),
+        }
+        regular,bold = families[brand['font_family']]
+        F_REG = ['C:/Windows/Fonts/'+regular, '/usr/share/fonts/truetype/dejavu/'+regular] + F_REG
+        F_BOLD = ['C:/Windows/Fonts/'+bold, '/usr/share/fonts/truetype/dejavu/'+bold] + F_BOLD
+        F_IMPACT = F_BOLD
+        F_BLACK = F_BOLD
+        if brand.get('logo_path'):
+            logo = load_product(brand['logo_path'])
 
     card_style = rng.choice(["round", "sharp", "soft", "outline"])
     st = {
@@ -356,6 +402,7 @@ def main():
     }
 
     st["style"] = style
+    st["flip"] = spec.get("layout_variant", 0) == 1
     # Art direction is selected by concept, not randomized decoration.
     directions = {
         "premium": ((247, 245, 240), (235, 232, 225), "plain", "rect", .015),
@@ -368,6 +415,11 @@ def main():
     bg1, bg2, st["head"], st["pill"], st["radius"] = directions[style]
     st["card"] = "round"
     st["tfont"] = F_REG if style == "premium" else F_BOLD if style in ("frozen", "editorial") else F_IMPACT
+    if brand:
+        st['price_ink']=accent if contrast(c1,accent)>=3 else ink_on(c1)
+        st['primary_ink']=ink_on(c1)
+        st['tag_ink']=ink_on(accent)
+        st['white_ink']=c1 if contrast(c1,WHITE)>=3 else ink_on(WHITE)
     canvas = gradient((W, H), bg1, bg2, "v").convert("RGBA")
     if style == "flash":
         canvas = decorate(canvas, W, H, "rays", rng)
@@ -376,6 +428,9 @@ def main():
     elif style == "frozen":
         ImageDraw.Draw(canvas).ellipse([int(-W*.3), int(H*.35), int(W*1.3), int(H*1.3)], fill=(243, 252, 255))
     header_color = c2 if style in ("premium", "frozen", "editorial") else WHITE
+    if brand:
+        header_bg=c2 if st['head']=='ribbon' else bg1
+        header_color=header_color if contrast(header_color,header_bg)>=3 else ink_on(header_bg)
 
     items = spec["items"]
     n = len(items)
@@ -392,8 +447,8 @@ def main():
     header_h = int(H * ((0.24 if landscape else 0.18) if subtitle else (0.2 if landscape else 0.14)))
     if st["head"] == "ribbon":
         header_h += int(H * 0.012)
-    footer_h = int(H * (0.14 if landscape else 0.075)) if footer_text else 0
-    bottom_margin = footer_h + gap if footer_text else int(H * 0.03)
+    footer_h = int(H * (0.14 if landscape else 0.075)) if footer_text or logo is not None else 0
+    bottom_margin = footer_h + gap if footer_h else int(H * 0.03)
 
     panel_h = 0
     if bundle:
@@ -402,6 +457,8 @@ def main():
     grid_top = header_h
     grid_h = H - bottom_margin - grid_top - (panel_h + gap if bundle else 0)
     rects = creative_plan(style, (margin, grid_top, W - 2 * margin, grid_h), n, landscape)
+    if st["flip"]:
+        rects = [(W - x - w, y, w, h) for x, y, w, h in rects]
 
     sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     sd = ImageDraw.Draw(sh)
@@ -411,16 +468,33 @@ def main():
     for (x, y, w, h) in shadow_rects:
         sd.rounded_rectangle([x, y + 10, x + w, y + h + 10],
                              radius=int(min(w, h) * max(st["radius"], 0.02)), fill=(0, 0, 0, 120))
-    canvas = Image.alpha_composite(canvas, sh.filter(ImageFilter.GaussianBlur(14)))
-    d = ImageDraw.Draw(canvas, "RGBA")
+    shadow = sh.filter(ImageFilter.GaussianBlur(14))
+    if recorder:
+        recorder.image(canvas, "Background", 0, 0)
+        recorder.image(shadow, "Bayangan panel", 0, 0)
+    canvas = Image.alpha_composite(canvas, shadow)
+    d = RecordedDraw(canvas, recorder) if recorder else ImageDraw.Draw(canvas, "RGBA")
 
     if title:
         head = st["head"]
         tw_max = W - 2 * margin - (60 if head == "ribbon" else 0)
         tf = fit_font(d, title, st["tfont"], tw_max, int(H * (0.14 if landscape else 0.085)), 24)
+        if subtitle:
+            # Fit the whole header block, including subtitle pill, above the grid.
+            while tf.size>6:
+                test_box=d.textbbox((0,0),title,font=tf)
+                sf_test=fit_font(d,subtitle,F_BOLD,W-2*margin-80,max(16,int(tf.size*.38)),14)
+                sub_box=d.textbbox((0,0),subtitle,font=sf_test)
+                sub_height=sub_box[3]-sub_box[1]
+                factor=.45 if st['head']=='ribbon' else .32 if st['head']=='underline' else .25
+                bottom=int(header_h*.10)+(test_box[3]-test_box[1])+int(tf.size*factor)+sub_height+2*int(sub_height*.5)
+                if bottom<=header_h-max(4,int(gap*.4)):break
+                tf=load_font(st['tfont'],tf.size-1)
         tb = d.textbbox((0, 0), title, font=tf)
         tw, th = tb[2] - tb[0], tb[3] - tb[1]
         tx = (W - tw) / 2 - tb[0]
+        if st["flip"] and st["head"] != "ribbon":
+            tx = margin - tb[0]
         ty0 = int(header_h * 0.10)
         ty = ty0 - tb[1]
         pady = int(tf.size * 0.18)
@@ -435,7 +509,7 @@ def main():
             d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
             d.text((tx, ty), title, font=tf, fill=header_color)
             bar_y = ty0 + th + int(tf.size * 0.14)
-            d.rounded_rectangle([(W - tw) / 2, bar_y, (W + tw) / 2, bar_y + 8], radius=4, fill=accent)
+            d.rounded_rectangle([tx + tb[0], bar_y, tx + tb[0] + tw, bar_y + 8], radius=4, fill=accent)
             sub_y = ty0 + th + int(tf.size * 0.32)
         else:
             d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
@@ -450,14 +524,31 @@ def main():
             sx = (W - sw - 2 * spx) / 2
             d.rounded_rectangle([sx, sub_y, sx + sw + 2 * spx, sub_y + sh_ + 2 * spy],
                                 radius=(sh_ + 2 * spy) // 2, fill=(255, 255, 255, 240))
-            d.text((sx + spx - sb[0], sub_y + spy - sb[1]), subtitle, font=sf, fill=c1)
+            d.text((sx + spx - sb[0], sub_y + spy - sb[1]), subtitle, font=sf, fill=st.get("white_ink", c1))
 
-    if footer_text:
+    if footer_h:
         d.rectangle([0, H - footer_h, W, H], fill=c2)
-        ff = fit_font(d, footer_text, F_BOLD, W - 2 * margin, int(footer_h * 0.5), 14)
-        fb = d.textbbox((0, 0), footer_text, font=ff)
-        d.text(((W - (fb[2] - fb[0])) / 2 - fb[0], H - footer_h + (footer_h - (fb[3] - fb[1])) / 2 - fb[1]),
-               footer_text, font=ff, fill=WHITE)
+        if recorder: recorder.layers[-1]["brandRole"] = "footer"
+        text_x = margin
+        if logo is not None:
+            box_w, box_h = int(footer_h*1.5), int(footer_h*.72)
+            lx, ly = margin, H-footer_h+(footer_h-box_h)//2
+            d.rounded_rectangle([lx-4,ly-4,lx+box_w+4,ly+box_h+4],radius=8,fill=WHITE)
+            if recorder: recorder.layers[-1]["brandRole"] = "logo"
+            stamp = ImageOps.contain(logo,(box_w,box_h),Image.Resampling.LANCZOS)
+            ix,iy = lx+(box_w-stamp.width)//2,ly+(box_h-stamp.height)//2
+            canvas.alpha_composite(stamp,(ix,iy))
+            if recorder:
+                recorder.image(logo,'Logo brand',ix,iy,stamp.width,stamp.height)
+                recorder.layers[-1]["brandRole"] = "logo"
+            text_x = lx+box_w+gap
+        if footer_text:
+            text_width = W-margin-text_x
+            ff = fit_font(d, footer_text, F_BOLD, text_width, int(footer_h * 0.5), 14)
+            fb = d.textbbox((0, 0), footer_text, font=ff)
+            footer_ink = ink_on(c2) if brand else WHITE
+            d.text((text_x+(text_width-(fb[2]-fb[0]))/2-fb[0], H-footer_h+(footer_h-(fb[3]-fb[1]))/2-fb[1]),footer_text,font=ff,fill=footer_ink)
+            if recorder: recorder.layers[-1]["brandRole"] = "footer"
 
     badge = (spec.get("badge") or "").strip()
     for (x, y, w, h), item in zip(rects, items):
@@ -466,7 +557,13 @@ def main():
     if bundle:
         draw_bundle_panel(d, margin, H - bottom_margin - panel_h, W - 2 * margin, panel_h, bundle, st)
 
-    canvas.convert("RGB").save(out, "JPEG", quality=93, optimize=True)
+    canvas.convert("RGB").save(out, "JPEG", quality=95, optimize=True)
+    if spec.get('png_output'):
+        canvas.convert('RGB').save(spec['png_output'],'PNG',optimize=True)
+    if recorder:
+        from pathlib import Path
+        Path(recorder.folder / 'document.json').write_text(json.dumps(dict(version=1, title=title or 'Promo', format=fmt,
+            width=W, height=H, layers=recorder.layers, assets=recorder.assets)), encoding='utf-8')
     print(json.dumps({"width": W, "height": H}))
 
 

@@ -1,0 +1,1035 @@
+diff --git a/1-INSTAL-WINDOWS.bat b/1-INSTAL-WINDOWS.bat
+new file mode 100644
+index 0000000..2b8c73f
+--- /dev/null
++++ b/1-INSTAL-WINDOWS.bat
+@@ -0,0 +1,33 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++echo === INSTAL AUTOFEEDS ===
++where node >nul 2>&1
++if errorlevel 1 goto missing_node
++node -e "if(22 > Number(process.versions.node.split('.')[0]))process.exit(1)"
++if errorlevel 1 goto missing_node
++where python >nul 2>&1
++if errorlevel 1 goto missing_python
++python -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)"
++if errorlevel 1 goto missing_python
++call npm ci
++if errorlevel 1 goto failed
++python -m pip install -r requirements.txt
++if errorlevel 1 goto failed
++echo.
++echo Instalasi dasar selesai. Jalankan 2-MULAI-WINDOWS.bat.
++echo Model AI foto dan Ollama bersifat opsional untuk fitur tertentu; baca panduan.
++pause
++exit /b 0
++:missing_node
++echo Pasang Node.js 22 atau lebih baru, lalu buka kembali file ini.
++pause
++exit /b 1
++:missing_python
++echo Pasang Python 3.10 atau lebih baru dengan opsi Add Python to PATH.
++pause
++exit /b 1
++:failed
++echo Instalasi belum selesai. Simpan pesan error di atas untuk diperiksa.
++pause
++exit /b 1
+diff --git a/2-MULAI-WINDOWS.bat b/2-MULAI-WINDOWS.bat
+new file mode 100644
+index 0000000..6baee27
+--- /dev/null
++++ b/2-MULAI-WINDOWS.bat
+@@ -0,0 +1,13 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++if not exist node_modules (
++ echo Jalankan 1-INSTAL-WINDOWS.bat terlebih dahulu.
++ pause
++ exit /b 1
++)
++echo === AUTOFEEDS ===
++echo Tunggu tulisan Ready, lalu buka http://localhost:3000
++echo Biarkan terminal ini terbuka. Untuk berhenti tekan Ctrl+C.
++call npm run dev
++pause
+diff --git a/README.md b/README.md
+index d9f02b9..12eeb6c 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,9 @@
+ 
+ Studio konten promosi lokal: unggah foto produk, analisis melalui Ollama, buat caption dan poster, serta siapkan foto produk tanpa menimpa sumber asli.
+ 
+-Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), batch variasi desain (Fase 5), Design Editor berbasis layer (Fase 6), serta Brand Kit dan Content Studio (Fase 7).
++Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), batch variasi desain (Fase 5), Design Editor berbasis layer (Fase 6), Brand Kit dan Content Studio (Fase 7), serta ekspor/ukuran khusus dan validasi akhir (Fase 8).
++
++Panduan langkah demi langkah: [docs/PANDUAN-PENGGUNAAN.md](docs/PANDUAN-PENGGUNAAN.md). Panduan visual HTML disertakan dalam paket unduhan.
+ 
+ ## Menjalankan di Windows 11
+ 
+@@ -16,17 +18,19 @@ python -m pip install -r requirements.txt
+ npm run dev
+ ```
+ 
++Alternatif Windows: jalankan `1-INSTAL-WINDOWS.bat`, lalu `2-MULAI-WINDOWS.bat`. File BAT belum diuji langsung pada Windows.
++
+ Buka `http://localhost:3000`. Saat memperbarui proyek yang sudah ada, hentikan server dan backup folder `database` dan `storage` terlebih dahulu, lalu jalankan ulang server setelah memasang pembaruan.
+ 
+ ## Fitur yang tersedia
+ 
+ - Upload JPG/PNG/WEBP dan penyimpanan lokal.
+ - Analyzer dan Content Studio berbasis Ollama; model dipilih melalui Settings dan harus sudah terpasang.
+-- Promo Composer: 1–6 produk atau bundling, harga tervalidasi, enam konsep komposisi, empat ukuran poster dan unduhan JPG.
++- Promo Composer: 1–6 produk atau bundling, harga tervalidasi, enam konsep komposisi, empat ukuran preset + custom 512–4096 px dan unduhan JPG/PNG.
+ - Product Image Studio: pencahayaan, kontras, ketajaman, isolasi produk opsional, background transparan/warna, ukuran/posisi, bayangan, riwayat varian dan unduhan PNG foto.
+ - Brand Kit: logo, palette, font, footer, default promosi dan template mandiri; snapshot menjaga hasil lama.
+ - Content Studio: fakta manual/analisis, Indonesia/English, CTA/edukasi/copywriting, dan gaya brand melalui Ollama.
+-- Design Editor: teks/harga/foto/bentuk sebagai layer terpisah, drag/resize/rotasi, undo/redo, penyimpanan dan unduhan JPG/SVG.
++- Design Editor: teks/harga/foto/bentuk sebagai layer terpisah, drag/resize/rotasi, undo/redo, penyimpanan dan unduhan JPG/PNG/SVG, transparansi PNG dan pilihan kualitas JPG.
+ - Batch 4–6 poster dengan konsep berbeda, galeri perbandingan, desain pilihan, dan pembuatan ulang dari pengaturan tersimpan.
+ - Pemilihan foto asli atau varian olahan untuk setiap produk di Promo Composer.
+ - Content Library, History dan Settings.
+@@ -58,9 +62,10 @@ node tests/smoke-phase4.mjs
+ node tests/smoke-phase5.mjs
+ node tests/smoke-phase6.mjs
+ node tests/smoke-phase7.mjs
++node tests/smoke-phase8.mjs
+ ```
+ 
+-Smoke test memerlukan build yang telah selesai, port 3064–3067 yang bebas, dan Python/Pillow. Smoke test memakai direktori data sementara dan membersihkannya setelah selesai. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
++Smoke test memerlukan build yang telah selesai, port 3064–3068 yang bebas, dan Python/Pillow. Smoke test memakai direktori data sementara dan membersihkannya setelah selesai. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
+ 
+ ## Dokumentasi dan batas fase
+ 
+@@ -70,5 +75,6 @@ Smoke test memerlukan build yang telah selesai, port 3064–3067 yang bebas, dan
+ - [Fase 5: variasi desain dan hasil validasi](docs/FASE-5-VARIASI-DESAIN.md).
+ - [Fase 6: Design Editor dan hasil validasi](docs/FASE-6-DESIGN-EDITOR.md).
+ - [Fase 7: Brand Kit dan Content Studio](docs/FASE-7-BRAND-KIT-CONTENT-STUDIO.md).
++- [Fase 8: ekspor dan validasi akhir](docs/FASE-8-EKSPOR-DAN-VALIDASI.md).
+ 
+-Ekspor PNG poster, custom size dan pemeriksaan akhir tetap Fase 8. Untuk editor, pilih hasil Promo Composer lalu klik **Edit desain (salinan)**. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.
++Fase 8 telah tersedia. Untuk editor, pilih hasil Promo Composer lalu klik **Edit desain (salinan)**. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.
+diff --git a/app/api/designs/route.ts b/app/api/designs/route.ts
+index 0ebe8dc..afc8124 100644
+--- a/app/api/designs/route.ts
++++ b/app/api/designs/route.ts
+@@ -1,7 +1,7 @@
+ import fs from "node:fs";
+ import { NextResponse } from "next/server";
+ import { getDb, logActivity } from "@/lib/db";
+-import { DESIGN_FORMATS, newLayer, validateDocument, type DesignDocument } from "@/lib/design-document";
++import { DESIGN_FORMATS, validateCanvasSize, newLayer, validateDocument, type DesignDocument } from "@/lib/design-document";
+ import { cloneDocument, designAssetPath, tracePromo } from "@/lib/design-storage";
+ const bad = (error: string, status=400) => NextResponse.json({error},{status});
+ const idOk = (n: number) => Number.isSafeInteger(n)&&n>0;
+@@ -31,9 +31,9 @@ export async function POST(req: Request) {
+       const result=await tracePromo(source);doc=result.doc;assets=result.assets;
+     } else {
+       const format=body.format??"feed";
+-      if (typeof format!=="string" || !Object.hasOwn(DESIGN_FORMATS,format)) return bad("Format tidak valid.");
+-      const key=format as keyof typeof DESIGN_FORMATS;
+-      const size=DESIGN_FORMATS[key];
++      if (typeof format!=="string" || (format!=="custom"&&!Object.hasOwn(DESIGN_FORMATS,format))) return bad("Format tidak valid.");
++      const key=format as DesignDocument["format"];
++      const size=key==="custom"?validateCanvasSize(body.width,body.height):DESIGN_FORMATS[key];
+       doc={version:1,title:"Desain baru",format:key,width:size.width,height:size.height,layers:[newLayer("rect",{name:"Background",x:0,y:0,width:size.width,height:size.height,fill:"#f8fafc",locked:true,radius:0})]};
+     }
+     const db=getDb();
+diff --git a/app/api/promo-file/route.ts b/app/api/promo-file/route.ts
+index 04c7ca4..cd5fce4 100644
+--- a/app/api/promo-file/route.ts
++++ b/app/api/promo-file/route.ts
+@@ -1,5 +1,6 @@
+ import fs from "node:fs";
+ import { getDb } from "@/lib/db";
++import { promoPng } from "@/lib/promo-png";
+ import { promoPath } from "@/lib/promo";
+ 
+ // /api/promo-file?id=5  (tambah &download=1 untuk mengunduh)
+@@ -13,16 +14,19 @@ export async function GET(req: Request) {
+     .get(id) as { output_filename: string; title: string } | undefined;
+   if (!row) return new Response("Tidak ditemukan", { status: 404 });
+ 
+-  const p = promoPath(row.output_filename);
++  const format=url.searchParams.get("format")??"jpg";
++  if(!["jpg","png"].includes(format))return new Response("Format tidak valid",{status:400});
++  let p:string|null;
++  try{p=format==="png"?await promoPng(row.output_filename):promoPath(row.output_filename);}catch{return new Response("Ekspor PNG gagal. Periksa Python/Pillow.",{status:500});}
+   if (!p || !fs.existsSync(p)) return new Response("File hilang", { status: 404 });
+ 
+   const headers: Record<string, string> = {
+-    "Content-Type": "image/jpeg",
++    "Content-Type": format==="png"?"image/png":"image/jpeg",
+     "Cache-Control": "private, max-age=31536000, immutable",
+     "X-Content-Type-Options": "nosniff",
+   };
+   if (url.searchParams.get("download") === "1") {
+-    headers["Content-Disposition"] = `attachment; filename="promo-${id}.jpg"`;
++    headers["Content-Disposition"] = `attachment; filename="promo-${id}.${format}"`;
+   }
+   return new Response(new Uint8Array(fs.readFileSync(p)), { headers });
+ }
+\ No newline at end of file
+diff --git a/app/api/promo/route.ts b/app/api/promo/route.ts
+index 0187470..4793719 100644
+--- a/app/api/promo/route.ts
++++ b/app/api/promo/route.ts
+@@ -1,4 +1,5 @@
+ import fs from "node:fs";
++import { validateCanvasSize } from "@/lib/design-document";
+ import { selectedBrand, rendererBrand } from "@/lib/brands";
+ import { validateBrandSnapshot, type BrandSnapshot } from "@/lib/brand-options";
+ import { createPromoBatch, nextVariationStyle, variationCount, variationStyles } from "@/lib/promo-variations";
+@@ -83,6 +84,9 @@ export async function POST(req: Request) {
+     if (!PROMO_THEMES.some((t) => t.id === theme)) return bad("Tema tidak valid.");
+     if (!PROMO_TYPES.some((t) => t.id === type)) return bad("Jenis promo tidak valid.");
+ 
++    let customSize: {width:number;height:number}|undefined;
++    if(format==="custom"){try{customSize=validateCanvasSize(body.width,body.height);}catch(e){return bad((e as Error).message);}}
++
+     const params: PromoParams = {
+       discountPercent: Math.round(Number(body.discount_percent)),
+       discountAmount: parseAmount(String(body.discount_amount ?? "")) ?? 0,
+@@ -170,6 +174,7 @@ export async function POST(req: Request) {
+     const title = clean(body.title ?? brand?.promo_title, 40);
+     const seed = crypto.randomInt(1, 2_000_000_000);
+     const spec: PromoSpec = {
++      ...customSize,
+       format,
+       theme,
+       seed,
+@@ -185,7 +190,7 @@ export async function POST(req: Request) {
+     };
+     const styles = variationStyles(style, count, crypto.randomInt(0, 5));
+     const request = {
+-      brand_snapshot: brand, format, theme, promo_type: type, title, subtitle: spec.subtitle, footer: spec.footer, badge: spec.badge,
++      ...customSize, brand_snapshot: brand, format, theme, promo_type: type, title, subtitle: spec.subtitle, footer: spec.footer, badge: spec.badge,
+       discount_percent: params.discountPercent, discount_amount: params.discountAmount,
+       buy_qty: params.buyQty, free_qty: params.freeQty, bundle_price: params.bundlePrice,
+       items: rawItems.map((r, index) => ({ image_id: Number(r.image_id), variant_id: r.variant_id == null ? null : Number(r.variant_id),
+diff --git a/app/brand-kit/page.tsx b/app/brand-kit/page.tsx
+index 1466f24..b8b13b9 100644
+--- a/app/brand-kit/page.tsx
++++ b/app/brand-kit/page.tsx
+@@ -39,7 +39,7 @@ export default function BrandKitPage(){
+      <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Font utama<select value={draft.font_family} onChange={e=>setDraft({...draft,font_family:e.target.value})} className={field}>{BRAND_FONTS.map(font=><option key={font}>{font}</option>)}</select></label><label className="text-sm">Footer / kontak<input aria-label="Footer brand" maxLength={80} value={draft.footer_text} onChange={e=>setDraft({...draft,footer_text:e.target.value})} className={field}/></label></div>
+      <label className="block text-sm">Panduan gaya bahasa<textarea aria-label="Panduan gaya bahasa" rows={3} maxLength={600} value={draft.voice} onChange={e=>setDraft({...draft,voice:e.target.value})} className={field} placeholder="Contoh: ramah, jelas, gunakan sapaan Kak, jangan berlebihan."/></label>
+      <h3 className="text-sm font-semibold">Pengaturan awal promosi</h3>
+-     <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Konsep<select value={draft.promo_style} onChange={e=>setDraft({...draft,promo_style:e.target.value})} className={field}>{PROMO_STYLES.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Ukuran<select value={draft.promo_format} onChange={e=>setDraft({...draft,promo_format:e.target.value})} className={field}>{PROMO_FORMATS.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Judul awal<input maxLength={40} value={draft.promo_title} onChange={e=>setDraft({...draft,promo_title:e.target.value})} className={field}/></label><label className="text-sm">Badge awal<input maxLength={16} value={draft.promo_badge} onChange={e=>setDraft({...draft,promo_badge:e.target.value})} className={field}/></label><label className="text-sm">Gaya konten<select value={draft.tone} onChange={e=>setDraft({...draft,tone:e.target.value})} className={field}>{TONES.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Bahasa konten<select value={draft.language} onChange={e=>setDraft({...draft,language:e.target.value})} className={field}><option value="id">Indonesia</option><option value="en">English</option></select></label></div>
++     <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Konsep<select value={draft.promo_style} onChange={e=>setDraft({...draft,promo_style:e.target.value})} className={field}>{PROMO_STYLES.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Ukuran<select value={draft.promo_format} onChange={e=>setDraft({...draft,promo_format:e.target.value})} className={field}>{PROMO_FORMATS.filter(s=>s.id!=="custom").map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Judul awal<input maxLength={40} value={draft.promo_title} onChange={e=>setDraft({...draft,promo_title:e.target.value})} className={field}/></label><label className="text-sm">Badge awal<input maxLength={16} value={draft.promo_badge} onChange={e=>setDraft({...draft,promo_badge:e.target.value})} className={field}/></label><label className="text-sm">Gaya konten<select value={draft.tone} onChange={e=>setDraft({...draft,tone:e.target.value})} className={field}>{TONES.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Bahasa konten<select value={draft.language} onChange={e=>setDraft({...draft,language:e.target.value})} className={field}><option value="id">Indonesia</option><option value="en">English</option></select></label></div>
+      <label className="flex gap-2 text-sm"><input type="checkbox" checked={draft.is_default} onChange={e=>setDraft({...draft,is_default:e.target.checked})}/>Gunakan sebagai Brand Kit default</label>
+      <div className="flex flex-wrap gap-2"><button onClick={save} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white">{busy?'Menyimpan…':'Simpan Brand Kit'}</button>{editing&&<button onClick={remove} className={button+' text-rose-600'}>Hapus Brand Kit</button>}</div>
+     </section>
+diff --git a/app/editor/page.tsx b/app/editor/page.tsx
+index dc19348..8f49cda 100644
+--- a/app/editor/page.tsx
++++ b/app/editor/page.tsx
+@@ -2,8 +2,9 @@
+ 
+ import { useEffect, useRef, useState, useCallback } from "react";
+ import Link from "next/link";
++import {exportDesign,type ExportKind} from "@/lib/design-export";
+ import type {BrandKit} from "@/lib/brand-options";
+-import { DESIGN_FORMATS, DESIGN_FONTS, constrainLayer, documentSvg, newLayer, resizeDocument, type DesignDocument, type DesignLayer } from "@/lib/design-document";
++import { DESIGN_FORMATS, DESIGN_FONTS, constrainLayer, documentSvg, newLayer, resizeDocument, validateCanvasSize, type DesignDocument, type DesignLayer } from "@/lib/design-document";
+ import { commitHistory, initialHistory, undoHistory, redoHistory, type DesignHistory } from "@/lib/design-history";
+ 
+ type Saved = { id: number; title: string; updated_at: string };
+@@ -23,6 +24,7 @@ export default function EditorPage(){
+   const [id,setId]=useState(0),[revision,setRevision]=useState(1),[history,setHistory]=useState<DesignHistory|null>(null);
+   const [selected,setSelected]=useState<string|null>(null),[savedJson,setSavedJson]=useState("");
+   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(""),[notice,setNotice]=useState("");
++  const [customWidth,setCustomWidth]=useState(1200),[customHeight,setCustomHeight]=useState(900),[quality,setQuality]=useState(.95);
+   const [zoom,setZoom]=useState(.45),[newFormat,setNewFormat]=useState<DesignDocument['format']>('feed');
+   const canvas=useRef<HTMLDivElement>(null),viewport=useRef<HTMLDivElement>(null),drag=useRef<Drag|null>(null),upload=useRef<HTMLInputElement>(null);
+   const doc=history?.present??null,layer=doc?.layers.find(l=>l.id===selected),dirty=doc?JSON.stringify(doc)!==savedJson:false;
+@@ -60,7 +62,7 @@ export default function EditorPage(){
+   function commit(next:DesignDocument){setHistory(current=>current?commitHistory(current,next):initialHistory(next));setNotice("");}
+   function updateLayer(patch:Partial<DesignLayer>){if(!doc||!layer)return;const updated=constrainLayer({...layer,...patch},doc.width,doc.height);commit({...doc,layers:doc.layers.map(l=>l.id===layer.id?updated:l)});}
+   async function openDesign(designId:number){if(dirty&&!confirm('Buka dokumen lain dan lepaskan perubahan yang belum disimpan?'))return;setBusy(true);setError("");try{accept(await api(`/api/designs?id=${designId}`));}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+-  async function createDesign(){if(dirty&&!confirm('Buat dokumen baru dan lepaskan perubahan yang belum disimpan?'))return;setBusy(true);setError("");try{accept(await api('/api/designs',{format:newFormat}));await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++  async function createDesign(){if(dirty&&!confirm('Buat dokumen baru dan lepaskan perubahan yang belum disimpan?'))return;setBusy(true);setError("");try{accept(await api('/api/designs',{format:newFormat,...(newFormat==='custom'?validateCanvasSize(customWidth,customHeight):{})}));await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   async function save(){if(!doc||busy)return;setBusy(true);setError("");try{const result=await api('/api/designs',{id,revision,doc},'PATCH');setRevision(result.revision);setSavedJson(JSON.stringify(doc));setNotice('Perubahan tersimpan.');await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   async function copyDesign(){if(!doc||busy)return;setBusy(true);setError("");try{accept(await api('/api/designs',{copy_id:id,doc}));setNotice('Salinan dokumen tersimpan; dokumen sebelumnya tetap tersedia.');await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   async function applyBrand(){if(!doc||!brandId||busy)return;setBusy(true);setError("");try{const result=await api('/api/design-brand',{design_id:id,revision,doc,brand_kit_id:brandId});commit(result.doc);setNotice('Brand diterapkan. Periksa susunan dan klik Simpan untuk menyimpan perubahan.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+@@ -116,26 +118,14 @@ export default function EditorPage(){
+     setHistory({...current.history,present:{...current.history.present,layers:current.history.present.layers.map(item=>item.id===l.id?updated:item)}});
+   }
+   function pointerUp(){const current=drag.current;if(!current)return;setHistory(h=>h?commitHistory(current.history,h.present):h);drag.current=null;}
+-  async function exportFile(kind:'jpg'|'svg'){
++  async function exportFile(kind:ExportKind){
+     if(!doc)return;setBusy(true);setError("");try{
+-      const assets=new Map<string,string>();
+-      for(const l of doc.layers)if(l.kind==='image'&&l.assetId&&!assets.has(l.assetId)){
+-        const response=await fetch(assetUrl(l.assetId));if(!response.ok)throw new Error('Aset hilang; ekspor dibatalkan.');
+-        const blob=await response.blob();const uri=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('Gagal membaca aset.'));reader.readAsDataURL(blob);});assets.set(l.assetId,uri);
+-      }
+-      const xml=documentSvg(doc,key=>assets.get(key)!),blob=new Blob([xml],{type:'image/svg+xml;charset=utf-8'});
+-      if(kind==='svg'){download(blob,`desain-${id}.svg`);setNotice('SVG mandiri diunduh; perubahan dokumen tetap perlu disimpan.');return;}
+-      await document.fonts.ready;const url=URL.createObjectURL(blob);
+-      try{
+-        const image=new Image();image.src=url;await image.decode();
+-        const bitmap=document.createElement('canvas');bitmap.width=doc.width;bitmap.height=doc.height;
+-        const context=bitmap.getContext('2d');if(!context)throw new Error('Canvas tidak tersedia.');
+-        context.fillStyle='#ffffff';context.fillRect(0,0,doc.width,doc.height);context.drawImage(image,0,0);
+-        const jpg=await new Promise<Blob>((resolve,reject)=>bitmap.toBlob(b=>b?resolve(b):reject(new Error('Ekspor JPG gagal.')),'image/jpeg',.95));
+-        download(jpg,`desain-${id}.jpg`);setNotice('JPG diunduh sesuai ukuran canvas.');
+-      }finally{URL.revokeObjectURL(url);}
++      const blob=await exportDesign(doc,assetUrl,kind,quality);download(blob,`desain-${id}-${doc.width}x${doc.height}.${kind}`);
++      setNotice(`${kind.toUpperCase()} ${doc.width}×${doc.height} diunduh. Perubahan dokumen tetap perlu disimpan.`);
+     }catch(e){setError((e as Error).message);}finally{setBusy(false);}
+   }
++  function applyCustomSize(){if(!doc)return;try{commit(resizeDocument(doc,'custom',customWidth,customHeight));setNotice('Ukuran khusus diterapkan. Periksa susunan lalu Simpan.');}catch(e){setError((e as Error).message);}}
++
+   function keyboard(e:React.KeyboardEvent){
+     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void save();return;}
+     if(busy||!history||['INPUT','TEXTAREA','SELECT'].includes((e.target as HTMLElement).tagName))return;
+@@ -151,7 +141,8 @@ export default function EditorPage(){
+     {error&&<p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+     {notice&&<p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
+     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
+-      <label className="text-xs">Canvas baru <select aria-label="Format canvas baru" value={newFormat} onChange={e=>setNewFormat(e.target.value as DesignDocument['format'])} className="ml-2 rounded border p-1">{Object.entries(DESIGN_FORMATS).map(([key,size])=><option key={key} value={key}>{size.label}</option>)}</select></label>
++      <label className="text-xs">Canvas baru <select aria-label="Format canvas baru" value={newFormat} onChange={e=>setNewFormat(e.target.value as DesignDocument['format'])} className="ml-2 rounded border p-1">{Object.entries(DESIGN_FORMATS).map(([key,size])=><option key={key} value={key}>{size.label}</option>)}<option value="custom">Ukuran khusus</option></select></label>
++      {newFormat==='custom'&&<><input aria-label="Lebar canvas baru" type="number" min="512" max="4096" value={customWidth} onChange={e=>setCustomWidth(Number(e.target.value))} className="w-24 rounded border p-2 text-xs"/><span>×</span><input aria-label="Tinggi canvas baru" type="number" min="512" max="4096" value={customHeight} onChange={e=>setCustomHeight(Number(e.target.value))} className="w-24 rounded border p-2 text-xs"/></>}
+       <button disabled={busy||loading} onClick={createDesign} className={button}>Buat desain baru</button>
+       <select aria-label="Buka dokumen" disabled={busy} value={id||''} onChange={e=>void openDesign(Number(e.target.value))} className="max-w-64 rounded-lg border p-2 text-xs"><option value="">Buka dokumen tersimpan</option>{saved.map(d=><option key={d.id} value={d.id}>#{d.id} · {d.title}</option>)}</select>
+       {busy&&<span role="status" className="text-xs text-indigo-600">Memproses…</span>}
+@@ -162,7 +153,7 @@ export default function EditorPage(){
+         <input aria-label="Nama desain" value={doc.title} maxLength={120} onChange={e=>commit({...doc,title:e.target.value})} className="min-w-0 rounded-lg border p-2 text-sm"/>
+         <button onClick={save} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white">Simpan{dirty?' *':''}</button>
+         <button disabled={!history?.past.length} onClick={()=>setHistory(h=>h?undoHistory(h):h)} className={button}>Undo</button><button disabled={!history?.future.length} onClick={()=>setHistory(h=>h?redoHistory(h):h)} className={button}>Redo</button>
+-        <button onClick={()=>void exportFile('jpg')} className={button}>Unduh JPG</button><button onClick={()=>void exportFile('svg')} className={button}>Unduh SVG</button>
++        <button onClick={()=>void exportFile('jpg')} className={button}>Unduh JPG</button><button onClick={()=>void exportFile('png')} className={button}>Unduh PNG</button><button onClick={()=>void exportFile('svg')} className={button}>Unduh SVG</button>
+         <button onClick={copyDesign} className={button}>Salin dokumen</button>
+         <button onClick={removeDesign} className={button+' text-rose-600'}>Hapus dokumen</button>
+         <select aria-label="Brand Kit editor" value={brandId} onChange={e=>setBrandId(Number(e.target.value))} className="max-w-48 rounded-lg border p-2 text-xs"><option value={0}>Pilih Brand Kit</option>{brands.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}</select><button disabled={!brandId} onClick={applyBrand} className={button}>Terapkan Brand Kit</button>
+@@ -178,16 +169,17 @@ export default function EditorPage(){
+           <div className="max-h-80 space-y-1 overflow-y-auto xl:max-h-[36rem]">{[...doc.layers].reverse().map(l=><button key={l.id} onClick={()=>setSelected(l.id)} className={`block w-full truncate rounded-lg px-2 py-2 text-left text-xs ${selected===l.id?'bg-indigo-100 text-indigo-800':'bg-slate-50 text-slate-600'}`} title={l.name}>{l.locked?'🔒 ':''}{!l.visible?'(tersembunyi) ':''}{l.name}</button>)}</div>
+         </section>
+         <section className="min-w-0 space-y-2">
+-          <div className="flex flex-wrap items-center gap-2 text-xs"><label>Zoom <input aria-label="Zoom canvas" type="range" min="0.1" max="1.5" step="0.05" value={zoom} onChange={e=>setZoom(Number(e.target.value))}/></label><span>{Math.round(zoom*100)}%</span>
+-            <select aria-label="Ukuran canvas" value={doc.format} onChange={e=>commit(resizeDocument(doc,e.target.value as DesignDocument['format']))} className="rounded border p-1">{Object.entries(DESIGN_FORMATS).map(([key,size])=><option key={key} value={key}>{size.width}×{size.height}</option>)}</select>
++          <div className="flex flex-wrap items-center gap-2 text-xs"><label>Zoom <input aria-label="Zoom canvas" type="range" min="0.1" max="1.5" step="0.05" value={zoom} onChange={e=>setZoom(Number(e.target.value))}/></label><span>{Math.round(zoom*100)}%</span><label>JPG <select aria-label="Kualitas JPG" value={quality} onChange={e=>setQuality(Number(e.target.value))} className="rounded border p-1"><option value={.85}>85%</option><option value={.95}>95%</option><option value={1}>100%</option></select></label>
++            <select aria-label="Ukuran canvas" value={doc.format} onChange={e=>{if(e.target.value==='custom'){setCustomWidth(doc.width);setCustomHeight(doc.height);commit(resizeDocument(doc,'custom',doc.width,doc.height));}else commit(resizeDocument(doc,e.target.value as DesignDocument['format']));}} className="rounded border p-1">{Object.entries(DESIGN_FORMATS).map(([key,size])=><option key={key} value={key}>{size.width}×{size.height}</option>)}<option value="custom">Ukuran khusus</option></select>
+           </div>
++          <div className="flex flex-wrap items-center gap-2 text-xs"><span>Ukuran khusus:</span><input aria-label="Lebar khusus" type="number" min="512" max="4096" value={customWidth} onChange={e=>setCustomWidth(Number(e.target.value))} className="w-24 rounded border p-2"/>×<input aria-label="Tinggi khusus" type="number" min="512" max="4096" value={customHeight} onChange={e=>setCustomHeight(Number(e.target.value))} className="w-24 rounded border p-2"/><button onClick={applyCustomSize} className={button}>Terapkan ukuran</button></div>
+           <div ref={viewport} className="max-h-[48rem] min-w-0 overflow-auto rounded-xl bg-slate-200 p-3">
+             <div ref={canvas} tabIndex={0} role="application" aria-label="Canvas editor. Pilih layer lalu gunakan tombol panah untuk menggeser." className="relative bg-white shadow-lg outline-none" style={{width:doc.width*zoom,height:doc.height*zoom,touchAction:'none'}} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp}>
+               <div className="h-full w-full [&>svg]:h-full [&>svg]:w-full" dangerouslySetInnerHTML={{__html:documentSvg(doc,assetUrl)}}/>
+               {layer&&layer.visible&&<svg viewBox={`0 0 ${doc.width} ${doc.height}`} className="pointer-events-none absolute inset-0 h-full w-full"><g transform={`translate(${layer.x} ${layer.y}) rotate(${layer.rotation} ${layer.width/2} ${layer.height/2})`}><rect width={layer.width} height={layer.height} fill="none" stroke="#4f46e5" strokeWidth={2/zoom}/>{!layer.locked&&<><rect data-mode="resize" x={layer.width-6/zoom} y={layer.height-6/zoom} width={12/zoom} height={12/zoom} fill="#4f46e5" className="pointer-events-auto cursor-nwse-resize"/><line x1={layer.width/2} y1="0" x2={layer.width/2} y2={-24/zoom} stroke="#4f46e5" strokeWidth={2/zoom}/><circle data-mode="rotate" cx={layer.width/2} cy={-24/zoom} r={6/zoom} fill="#4f46e5" className="pointer-events-auto cursor-grab"/></>}</g></svg>}
+             </div>
+           </div>
+-          <p className="text-xs text-slate-500">Seret untuk memindah; pegangan kotak untuk ukuran dan bulatan untuk rotasi. Foto tetap proporsional. Ctrl+S: simpan · Ctrl+Z/Y: undo/redo · panah: geser. Harga, harga coret, dan diskon merupakan layer terpisah.</p>
++          <p className="text-xs text-slate-500">Seret untuk memindah; pegangan kotak untuk ukuran dan bulatan untuk rotasi. Foto tetap proporsional. Ctrl+S: simpan · Ctrl+Z/Y: undo/redo · panah: geser. Harga, harga coret, dan diskon merupakan layer terpisah. PNG mempertahankan transparansi; sembunyikan Background jika tidak diperlukan.</p>
+         </section>
+         <section className="min-w-0 space-y-3 rounded-xl border bg-white p-3">
+           <h2 className="text-sm font-semibold">Properti layer</h2>
+diff --git a/app/promo/page.tsx b/app/promo/page.tsx
+index b4b7965..b96eb56 100644
+--- a/app/promo/page.tsx
++++ b/app/promo/page.tsx
+@@ -44,6 +44,7 @@ export default function PromoPage() {
+   const [subtitle, setSubtitle] = useState("");
+   const [footer, setFooter] = useState("");
+   const [badge, setBadge] = useState("PROMO");
++  const [customWidth,setCustomWidth]=useState(1200),[customHeight,setCustomHeight]=useState(900);
+   const [format, setFormat] = useState("feed");
+   const [style, setStyle] = useState("retail");
+   const [theme, setTheme] = useState("acak");
+@@ -167,6 +168,7 @@ export default function PromoPage() {
+           footer,
+           badge,
+           format,
++          ...(format==="custom"?{width:customWidth,height:customHeight}:{}),
+           theme,
+           style,
+           items: sel.map((s) => ({
+@@ -542,7 +544,7 @@ export default function PromoPage() {
+               </label>
+               <label className="text-xs font-medium text-slate-500">
+                 Ukuran
+-                <select value={format} onChange={(e) => setFormat(e.target.value)} className={inputCls}>
++                <select aria-label="Ukuran" value={format} onChange={(e) => setFormat(e.target.value)} className={inputCls}>
+                   {PROMO_FORMATS.map((f) => (
+                     <option key={f.id} value={f.id}>
+                       {f.label}
+@@ -550,6 +552,7 @@ export default function PromoPage() {
+                   ))}
+                 </select>
+               </label>
++              {format==='custom'&&<div className="grid grid-cols-2 gap-2"><label className="text-xs">Lebar (px)<input aria-label="Lebar poster khusus" type="number" min="512" max="4096" value={customWidth} onChange={e=>setCustomWidth(Number(e.target.value))} className={inputCls}/></label><label className="text-xs">Tinggi (px)<input aria-label="Tinggi poster khusus" type="number" min="512" max="4096" value={customHeight} onChange={e=>setCustomHeight(Number(e.target.value))} className={inputCls}/></label><p className="text-xs text-slate-500 col-span-2">512–4096 px per sisi; rasio 1:3 sampai 3:1.</p></div>}
+               <div>
+                 <div className="text-xs font-medium text-slate-500">Warna tema</div>
+                 <div className="mt-2 flex flex-wrap gap-2">
+@@ -620,6 +623,7 @@ export default function PromoPage() {
+                 >
+                   <Download size={16} /> Unduh JPG
+                 </a>
++                <a href={`/api/promo-file?id=${resultId}&format=png&download=1`} className="flex items-center gap-2 rounded-lg border border-indigo-200 px-4 py-2 text-indigo-700"><Download size={16}/>Unduh PNG</a>
+                 <button
+                   onClick={() => removeDesign(resultId)}
+                   className="flex items-center gap-2 rounded-lg px-4 py-2 text-rose-600 hover:bg-rose-50"
+diff --git a/docs/FASE-8-EKSPOR-DAN-VALIDASI.md b/docs/FASE-8-EKSPOR-DAN-VALIDASI.md
+new file mode 100644
+index 0000000..fbcd960
+--- /dev/null
++++ b/docs/FASE-8-EKSPOR-DAN-VALIDASI.md
+@@ -0,0 +1,80 @@
++# Fase 8 — Ekspor dan validasi akhir
++
++Baseline Fase 7: `06d6929`. Dikerjakan 1 November 2026.
++
++## Perubahan dari Fase 7
++
++| Bagian | Fase 7 | Fase 8 |
++| --- | --- | --- |
++| Unduhan Promo Composer | JPG | JPG dan PNG |
++| Unduhan editor | JPG/SVG | JPG/PNG/SVG |
++| Ukuran canvas | Empat preset | Preset + ukuran khusus |
++| Kualitas JPG editor | 95% tetap | Pilihan 85%, 95%, 100% |
++| Transparansi poster | SVG mengikuti layer | PNG juga mengikuti transparansi layer |
++| Tipografi renderer | Font minimum dapat terlalu besar untuk kotak kecil | Font dipilih dari anggaran ruang nama/harga; harga coret dan promo dipisahkan |
++| Header/label | Beberapa kombinasi rapat | Header memperhitungkan subjudul; ruang nama tidak bertabrakan dengan badge diskon pendek |
++| Penggunaan Windows | Perintah terminal | Dua file BAT pendamping + panduan visual |
++
++Ukuran khusus tersedia pada Promo Composer, canvas editor baru, dan pengubahan canvas editor. Batas: setiap sisi **512–4096 px**, bilangan bulat, rasio antara **1:3 dan 3:1**. Batas ini menghindari canvas sangat sempit dan menjaga penggunaan memori. Preset tetap: 1080×1350, 1080×1080, 1080×1920 dan 1200×630. Pengaturan awal Brand Kit tetap memilih preset; ukuran khusus ditetapkan per promo/dokumen.
++
++## Ekspor
++
++Poster baru menghasilkan JPG kualitas 95 dan PNG dari canvas renderer yang sama. PNG baru tidak dibuat dari JPEG, sehingga tidak menambah tahap kompresi lossy. Poster tetap merupakan komposisi dengan background; format PNG saja tidak otomatis membuat background transparan.
++
++Untuk poster lama yang hanya mempunyai JPG, unduhan PNG pertama dikonversi dari JPG tersimpan dengan ukuran tetap. Konversi ini tidak mengembalikan detail yang sudah hilang dalam JPEG. Jika foto sumber masih tersedia, buat ulang poster untuk mendapatkan PNG langsung dari renderer baru.
++
++Editor mengekspor perubahan saat ini, termasuk yang belum disimpan. **Ekspor tidak otomatis menyimpan dokumen.** PNG mempertahankan alpha; sembunyikan layer Background jika perlu transparansi. JPG meratakan area transparan ke putih. SVG menanam gambar PNG lokal sebagai data URL, tetapi tidak menanam font. Kualitas 85/95/100 hanya memengaruhi JPG editor, bukan PNG/SVG atau JPG generator yang tetap 95.
++
++Pengubahan format menjaga rasio foto/logo. Komponen background dan bayangan seluruh canvas menyesuaikan area canvas. Teks dan bentuk diposisikan ulang proporsional dan dibatasi di dalam canvas. Periksa komposisi setelah mengubah rasio; resize bukan auto-layout editorial ulang.
++
++File PNG pendamping dibersihkan bersama JPG ketika poster dihapus atau batch gagal. Format file invalid dan ukuran di luar batas ditolak. File lama tetap dapat dibuka dan diregenerasi dengan snapshot brand/fakta seperti sebelumnya. Foto sumber tidak ditimpa.
++
++## Cara memperbarui
++
++1. Hentikan server dan backup folder proyek, terutama `database` dan `storage`.
++2. Ekstrak paket Fase 8, salin source ke proyek Anda; jangan hapus data lama.
++3. Jalankan `1-INSTAL-WINDOWS.bat` untuk dependensi dasar, atau gunakan `npm ci` dan `python -m pip install -r requirements.txt`.
++4. Jalankan `2-MULAI-WINDOWS.bat`, atau `npm run dev`.
++5. Tunggu Ready dan buka `http://localhost:3000`.
++
++File BAT memeriksa Node.js minimal 22 serta Python minimal 3.10, menampilkan error jika instalasi belum selesai, dan tidak mengunduh model AI secara diam-diam. File BAT **belum dijalankan langsung pada Windows** dalam sesi ini; perintah aplikasi diuji pada Linux. Node 24.22.1, Python 3.12, Pillow 12.3.0 dan ONNX Runtime 1.31.1 digunakan pada pengujian.
++
++AI foto tetap opsional melalui `requirements-ai.txt` dan script pemasangan model. Content Studio tetap memerlukan Ollama/model teks yang dipasang dan dijalankan pengguna. Poster, editor dan pengaturan cahaya dasar dapat dipakai tanpa model teks.
++
++## Validasi akhir
++
++- TypeScript, ESLint, production build: lolos.
++- **27 tes Node + 21 tes Python = 48 tes otomatis**: seluruhnya lolos, tanpa skip pada sesi dengan model foto lokal aktif.
++- Suite Python mencakup 218 eksekusi render poster, termasuk preset, konversi layer, branding dan 48 kombinasi custom (6 konsep × 4 ukuran × 2 mode). JPG/PNG sesuai dimensi; sumber tidak berubah; harga tetap lengkap; harga coret dan promo tidak bertumpuk pada fixture custom yang diuji.
++- Uji browser ekspor: PNG transparan 960×720 dan 1360×900, JPG berlatar putih, perubahan kualitas JPG menghasilkan data file berbeda, SVG mengikuti canvas, batch custom di Composer dan unduhan PNG 1200×800.
++- Uji API: empat preset, custom batch, dimensi/MIME, PNG untuk JPG lama, penolakan ukuran/format invalid, regenerasi/edit custom, persistence restart dan integritas foto asli.
++- Regresi API Fase 4–5 serta API/browser Fase 6–7: lolos.
++- Halaman dashboard, upload, image studio, analyzer, promo, editor, Brand Kit, Content Studio, library, history dan settings merespons HTTP 200.
++- Pemeriksaan visual desktop/HP memakai data DEMO. Screenshot dalam panduan bukan foto/harga dagangan aktual.
++
++Uji browser memakai Chromium headless Linux dengan viewport desktop/HP, bukan HP fisik. Windows 11/GPU AMD pengguna belum diuji langsung. Model foto CPU dijalankan nyata; alur teks diuji menggunakan fixture HTTP protokol Ollama, bukan evaluasi kualitas model bahasa nyata. Font dapat berbeda antar-OS dan file sumber beresolusi rendah tidak menjadi tajam hanya karena canvas diperbesar.
++
++Pengujian ini membuktikan kasus yang diuji, bukan bahwa setiap kombinasi foto, panjang teks, palette atau perangkat akan menghasilkan desain ideal. Untuk canvas kecil dengan banyak produk, teks dapat mengecil; gunakan ukuran preset yang besar atau kurangi produk, lalu rapikan melalui editor.
++
++## Perintah pemeriksaan
++
++```bash
++npx tsc --noEmit
++npm run lint
++npm run build
++node --test tests/*.test.mjs
++python -m unittest discover -s tests -p "test_*.py"
++node tests/smoke-phase4.mjs
++node tests/smoke-phase5.mjs
++node tests/smoke-phase6.mjs
++node tests/smoke-phase7.mjs
++node tests/smoke-phase8.mjs
++```
++
++Aktifkan `RUN_LOCAL_AI_TESTS=1` jika model foto tersedia. Smoke test Fase 8 memakai direktori data sementara dan port 3068. Browser opsional: `PHASE8_UI=1` dengan `PHASE8_CHROMIUM` atau modul browser portable pada lingkungan pengujian; Playwright tidak menjadi dependensi aplikasi pengguna.
++
++## Status pekerjaan
++
++Fase 3–8 telah diimplementasikan pada salinan kerja, di atas fondasi fase 1–2 dari repository awal. Paket source lengkap dan panduan dapat diterapkan pada proyek lokal. Perubahan belum dikirim ke GitHub dan tidak dipublikasikan ke layanan hosting/media sosial.
++
++Tetap di luar cakupan yang diimplementasikan: background adegan generatif, reflow paragraf/multiselect/grouping editor, embedding/upload font, pagination semua galeri, antrean AI persisten saat server dimatikan, dan verifikasi otomatis seluruh klaim produk. Batas tersebut telah dicatat pada laporan fase terkait, bukan disembunyikan sebagai tombol placeholder.
+diff --git a/docs/PANDUAN-PENGGUNAAN.md b/docs/PANDUAN-PENGGUNAAN.md
+new file mode 100644
+index 0000000..fd1d713
+--- /dev/null
++++ b/docs/PANDUAN-PENGGUNAAN.md
+@@ -0,0 +1,71 @@
++# Panduan penggunaan AUTOFEEDS — Fase 8
++
++Panduan visual dengan screenshot tersedia sebagai `PANDUAN-AUTOFEEDS-fase8.html` di paket unduhan. Screenshot dan angka contoh berlabel DEMO, bukan penawaran harga produk nyata.
++
++## Mulai dan perbarui
++
++1. Untuk pembaruan: hentikan server, backup proyek, database dan storage.
++2. Ekstrak paket. Salin source ke folder proyek tanpa menghapus database/storage.
++3. Pastikan Node.js 22+ dan Python 3.10+ tersedia.
++4. Klik `1-INSTAL-WINDOWS.bat` untuk instalasi awal/pembaruan dependensi.
++5. Klik `2-MULAI-WINDOWS.bat`, tunggu Ready, buka `http://localhost:3000`.
++6. Biarkan terminal terbuka. Ctrl+C untuk berhenti. Pada hari berikutnya cukup jalankan file nomor 2.
++
++Alternatif terminal di folder proyek:
++
++```bash
++npm ci
++python -m pip install -r requirements.txt
++npm run dev
++```
++
++## Siapkan brand
++
++Buka Brand Kit → Brand Kit baru. Isi nama, warna, font dan footer. Upload logo bila ada, atur default, lalu Simpan Brand Kit. Logo resmi belum tersedia pun kit dapat digunakan tanpa logo.
++
++## Siapkan foto produk
++
++Buka Image Upload → pilih/seret foto → isi nama/kategori → Simpan semua. Gunakan nama yang mudah dikenali.
++
++Opsional: Product Image Studio → pilih foto → atur cahaya/kontras/ketajaman → Buat hasil foto. Untuk mengganti background foto biasa, pasang model penghapus background lalu pilih mode transparan/warna dan aktifkan AI. PNG yang sudah transparan dapat dipakai tanpa model tersebut. Foto asli tetap tersimpan; pilih varian hasil olahan nanti di Composer.
++
++## Buat poster
++
++1. Promo Composer → pilih 1–6 produk.
++2. Pilih jenis promo. Masukkan harga sesuai label. Untuk Harga spesial, harga promo diisi langsung dan harga coret opsional.
++3. Pilih foto asli/varian, Brand Kit dan konsep.
++4. Pilih ukuran preset, atau Ukuran khusus lalu isi lebar/tinggi dalam piksel.
++5. Pilih 4, 5 atau 6 variasi dan klik tombol Buat variasi desain. Mode satu desain tetap tersedia.
++6. Klik thumbnail untuk membandingkan. Simpan desain pilihan memberi tanda favorit; seluruh hasil sudah masuk riwayat.
++7. Unduh JPG atau PNG. Buat ulang/variasi tambahan menggunakan data tersimpan, bukan perubahan formulir yang belum dikirim.
++
++## Edit dan ekspor
++
++Klik Edit desain (salinan). Pilih layer dari daftar atau canvas. Drag untuk memindah; kotak untuk resize; bulatan untuk rotasi. Atur teks/font/warna/posisi pada panel Properti. Undo/redo tersedia.
++
++Untuk ukuran khusus: isi Lebar khusus dan Tinggi khusus, klik Terapkan ukuran, periksa susunan, lalu Simpan. Sisi 512–4096 px dan rasio 1:3 sampai 3:1. Foto tetap proporsional.
++
++- JPG: pilih kualitas 85/95/100; area transparan menjadi putih.
++- PNG: menyimpan transparansi layer; sembunyikan Background jika tidak diperlukan.
++- SVG: gambar tertanam, elemen vektor tetap terpisah, tetapi font tidak tertanam.
++
++Klik Simpan/Ctrl+S untuk menyimpan dokumen. Mengunduh tidak otomatis menyimpan perubahan. Harga promo, harga coret dan diskon merupakan layer mandiri.
++
++## Simpan template
++
++Terapkan kit pada dokumen editor dan Simpan. Buka Brand Kit → pilih kit → pilih dokumen dan nama template → Simpan template. Gunakan template membuat salinan baru yang dapat diedit. Perubahan dokumen asal tidak mengganti template tersimpan.
++
++## Buat caption/CTA
++
++Buka Content Studio, pilih foto dan gunakan analisis atau isi fakta manual. Pilih brand, bahasa dan gaya, tulis info yang benar pada Info tambahan, lalu Buat konten. Ollama/model teks harus berjalan. Periksa hasil, simpan ke Content Library, salin, atau unduh TXT. Filter harga bukan verifikasi otomatis semua klaim produk.
++
++## Jika ada kendala
++
++- Tidak ada perubahan setelah menyalin: hentikan dan jalankan ulang server, lalu muat ulang halaman. Pastikan folder yang dijalankan adalah folder yang diperbarui.
++- Node/Python tidak ditemukan: pasang prasyarat dan aktifkan PATH, lalu buka terminal baru.
++- AI foto belum siap: pasang `requirements-ai.txt` dan jalankan `python scripts/setup_background_model.py`; pengaturan foto dasar tetap dapat dipakai.
++- Ollama tidak terhubung: jalankan Ollama dan sesuaikan alamat/model di Settings. Poster/editor tidak memerlukan Ollama.
++- Konflik revisi editor: salin dokumen jika ingin mempertahankan perubahan, atau muat ulang versi terbaru.
++- Teks terlalu kecil/susunan kurang pas: gunakan canvas lebih besar atau kurangi produk, lalu rapikan layer.
++
++Simpan backup database dan seluruh storage saat aplikasi berhenti. File BAT, Windows/perangkat pengguna dan kualitas model teks nyata masih perlu diverifikasi pada perangkat pengguna; aplikasi dan browser telah diuji pada Linux.
+diff --git a/lib/design-document.ts b/lib/design-document.ts
+index 86d3e50..d124ab9 100644
+--- a/lib/design-document.ts
++++ b/lib/design-document.ts
+@@ -13,7 +13,12 @@ export type DesignLayer = {
+   brandRole?: "footer" | "logo";
+   assetId?: string; radius?: number; d?: string; pathWidth?: number; pathHeight?: number;
+ };
+-export type DesignDocument = { version: 1; title: string; format: keyof typeof DESIGN_FORMATS; width: number; height: number; layers: DesignLayer[] };
++export type CanvasFormat=keyof typeof DESIGN_FORMATS|"custom";
++export function validateCanvasSize(width:unknown,height:unknown):{width:number;height:number}{
++  if(typeof width!=="number"||typeof height!=="number"||!Number.isInteger(width)||!Number.isInteger(height)||width<512||height<512||width>4096||height>4096||width/height<1/3||width/height>3)throw new Error("Ukuran khusus harus 512–4096 px per sisi, dengan rasio antara 1:3 dan 3:1.");
++  return {width,height};
++}
++export type DesignDocument = { version: 1; title: string; format: CanvasFormat; width: number; height: number; layers: DesignLayer[] };
+ const number = (v: unknown, low: number, high: number): number => {
+   if (typeof v !== "number" || !Number.isFinite(v) || v < low || v > high) throw new Error("Ukuran/posisi layer tidak valid.");
+   return v;
+@@ -36,9 +41,10 @@ export function constrainLayer(layer: DesignLayer, width: number, height: number
+ export function validateDocument(value: unknown): DesignDocument {
+   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Dokumen tidak valid.");
+   const v = value as Record<string, unknown>;
+-  if (v.version !== 1 || typeof v.title !== "string" || !v.title.trim() || v.title.length > 120 || typeof v.format !== "string" || !Object.hasOwn(DESIGN_FORMATS, v.format)) throw new Error("Identitas dokumen tidak valid.");
+-  const format = v.format as keyof typeof DESIGN_FORMATS;
+-  if (v.width !== DESIGN_FORMATS[format].width || v.height !== DESIGN_FORMATS[format].height) throw new Error("Ukuran dokumen tidak sesuai format.");
++  if (v.version !== 1 || typeof v.title !== "string" || !v.title.trim() || v.title.length > 120 || typeof v.format !== "string" || (v.format!=="custom"&&!Object.hasOwn(DESIGN_FORMATS, v.format))) throw new Error("Identitas dokumen tidak valid.");
++  const format = v.format as CanvasFormat;
++  if(format==="custom")validateCanvasSize(v.width,v.height);
++  if (format!=="custom"&&(v.width !== DESIGN_FORMATS[format].width || v.height !== DESIGN_FORMATS[format].height)) throw new Error("Ukuran dokumen tidak sesuai format.");
+   if (!Array.isArray(v.layers) || v.layers.length > 400) throw new Error("Maksimal 400 layer per desain.");
+   const ids = new Set<string>();
+   const layers = v.layers.map(raw => {
+@@ -82,10 +88,10 @@ export function newLayer(kind: DesignLayer["kind"], overrides: Partial<DesignLay
+     ...(kind === "text" ? { text: "Teks baru", fontFamily: "Arial", fontSize: 64, baseline: .8, bold: true } : {}),
+     ...(kind === "rect" ? { radius: 16 } : {}), ...overrides };
+ }
+-export function resizeDocument(doc: DesignDocument, format: DesignDocument["format"]): DesignDocument {
+-  const size = DESIGN_FORMATS[format], sx = size.width/doc.width, sy = size.height/doc.height;
++export function resizeDocument(doc: DesignDocument, format: DesignDocument["format"], width?:number, height?:number): DesignDocument {
++  const size = format==="custom"?validateCanvasSize(width,height):DESIGN_FORMATS[format], sx = size.width/doc.width, sy = size.height/doc.height;
+   return { ...doc, format, ...size, layers: doc.layers.map(l => {
+-    const scale = Math.min(sx, sy), keep = l.kind === "image" || l.kind === "text";
++    const scale = Math.min(sx, sy), keep = (l.kind === "image" && !["Background","Bayangan panel"].includes(l.name)) || l.kind === "text";
+     const w = l.width*(keep ? scale : sx), h = l.height*(keep ? scale : sy);
+     return constrainLayer({ ...l, x: (l.x+l.width/2)*sx-w/2, y: (l.y+l.height/2)*sy-h/2, width: w, height: h,
+       ...(l.kind === "text" ? { fontSize: (l.fontSize ?? 32)*scale } : {}) }, size.width, size.height);
+diff --git a/lib/design-export.ts b/lib/design-export.ts
+new file mode 100644
+index 0000000..a795d56
+--- /dev/null
++++ b/lib/design-export.ts
+@@ -0,0 +1,25 @@
++"use client";
++import {documentSvg,validateDocument,type DesignDocument} from "./design-document";
++export type ExportKind='jpg'|'png'|'svg';
++export async function exportDesign(doc:DesignDocument,assetUrl:(id:string)=>string,kind:ExportKind,quality=.95):Promise<Blob>{
++ validateDocument(doc);
++ if(!['jpg','png','svg'].includes(kind)||!Number.isFinite(quality)||quality<.7||quality>1)throw new Error('Pengaturan ekspor tidak valid.');
++ const assets=new Map<string,string>();
++ for(const layer of doc.layers)if(layer.visible&&layer.kind==='image'&&layer.assetId&&!assets.has(layer.assetId)){
++  const response=await fetch(assetUrl(layer.assetId));if(!response.ok)throw new Error('Aset hilang; ekspor dibatalkan.');
++  const blob=await response.blob();if(blob.type!=='image/png')throw new Error('Format aset tidak valid.');
++  const uri=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(new Error('Gagal membaca aset.'));reader.readAsDataURL(blob);});assets.set(layer.assetId,uri);
++ }
++ await document.fonts.ready;
++ const xml=documentSvg(doc,id=>assets.get(id)!),blob=new Blob([xml],{type:'image/svg+xml;charset=utf-8'});
++ if(kind==='svg')return blob;
++ const url=URL.createObjectURL(blob);
++ try{
++  const image=new Image();image.src=url;await image.decode();
++  const canvas=document.createElement('canvas');canvas.width=doc.width;canvas.height=doc.height;
++  const context=canvas.getContext('2d');if(!context)throw new Error('Canvas tidak tersedia pada browser ini.');
++  if(kind==='jpg'){context.fillStyle='#ffffff';context.fillRect(0,0,doc.width,doc.height);}
++  context.drawImage(image,0,0);
++  return await new Promise<Blob>((resolve,reject)=>canvas.toBlob(result=>result?resolve(result):reject(new Error('Ekspor gagal.')),'image/'+(kind==='jpg'?'jpeg':'png'),quality));
++ }finally{URL.revokeObjectURL(url);}
++}
+diff --git a/lib/design-storage.ts b/lib/design-storage.ts
+index 08e65da..8c66f5e 100644
+--- a/lib/design-storage.ts
++++ b/lib/design-storage.ts
+@@ -46,7 +46,7 @@ export async function tracePromo(promoId: number) {
+   const items: PromoSpecItem[] = metadata.items.map((i: { image_id: number; variant_id: number | null; name: string; price: string; old: string; tag: string }) => ({
+     path: imageSource(i.image_id, i.variant_id), name: i.name, price_text: i.price, old_text: i.old, tag: i.tag,
+   }));
+-  const spec: PromoSpec = { format: row.layout_format, theme: row.theme, seed: row.seed, style: row.style,
++  const spec: PromoSpec = { width:request.width, height:request.height, format: row.layout_format, theme: row.theme, seed: row.seed, style: row.style,
+     layout_variant: row.layout_variant, brand: rendererBrand(validateBrandSnapshot(request.brand_snapshot)), mode: request.promo_type === "bundling" ? "bundle" : "items",
+     title: typeof request.title === "string" ? request.title : row.title, subtitle: request.subtitle || "", footer: request.footer || "", badge: request.badge || "", items, bundle: metadata.bundle };
+   fs.mkdirSync(ASSET_DIR, { recursive: true });
+diff --git a/lib/promo-options.ts b/lib/promo-options.ts
+index bfe16d7..ec892a2 100644
+--- a/lib/promo-options.ts
++++ b/lib/promo-options.ts
+@@ -10,6 +10,7 @@ export const PROMO_STYLES = [
+ export const MAX_PROMO_ITEMS = 6;
+ 
+ export const PROMO_FORMATS = [
++  { id: "custom", label: "Ukuran khusus (512–4096 px)" },
+   { id: "feed", label: "Feed Instagram 4:5 (1080×1350)" },
+   { id: "square", label: "Persegi 1:1 (1080×1080)" },
+   { id: "story", label: "Story / Reels 9:16 (1080×1920)" },
+diff --git a/lib/promo-png.ts b/lib/promo-png.ts
+new file mode 100644
+index 0000000..7100c66
+--- /dev/null
++++ b/lib/promo-png.ts
+@@ -0,0 +1,18 @@
++import fs from "node:fs";
++import path from "node:path";
++import crypto from "node:crypto";
++import {execFile} from "node:child_process";
++import {promisify} from "node:util";
++import {promoPath} from "./promo";
++const run=promisify(execFile);
++// Older posters have only JPEGs; convert the stored JPEG without changing dimensions.
++export async function promoPng(filename:string){
++ const original=promoPath(filename),png=promoPath(filename.replace(/\.jpg$/,'.png'));
++ if(!original||!png)return null;if(fs.existsSync(png))return png;if(!fs.existsSync(original))return null;
++ const temporary=path.join(path.dirname(png),`.export-${crypto.randomUUID()}.png`);
++ try{
++  await run(process.env.AUTOFEEDS_PYTHON||'python',[path.join(process.cwd(),'scripts/convert_promo_png.py'),original,temporary],{timeout:60000,windowsHide:true});
++  try{fs.copyFileSync(temporary,png,fs.constants.COPYFILE_EXCL);}catch(e){if(!fs.existsSync(png))throw e;}
++  return png;
++ }finally{fs.rmSync(temporary,{force:true});}
++}
+diff --git a/lib/promo.ts b/lib/promo.ts
+index bfc0502..2e6c15c 100644
+--- a/lib/promo.ts
++++ b/lib/promo.ts
+@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
+ 
+ export const PROMO_DIR = path.join(UPLOAD_DIR, "promo");
+ const SCRIPT = path.join(process.cwd(), "scripts", "compose_promo.py");
+-const SAFE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/;
++const SAFE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png)$/;
+ 
+ export type PromoSpecItem = {
+   path: string;
+@@ -23,6 +23,8 @@ export type PromoSpecItem = {
+ 
+ export type PromoSpec = {
+   format: string;
++  width?: number;
++  height?: number;
+   theme: string;
+   seed: number;
+   style?: string;
+@@ -46,14 +48,15 @@ export async function composePromo(spec: PromoSpec): Promise<string> {
+   const filename = `${crypto.randomUUID()}.jpg`;
+   const out = path.join(PROMO_DIR, filename);
+   const specFile = path.join(PROMO_DIR, `.spec-${crypto.randomUUID()}.json`);
+-  fs.writeFileSync(specFile, JSON.stringify(spec), "utf-8");
++  fs.writeFileSync(specFile, JSON.stringify({...spec,png_output:out.replace(/\.jpg$/, ".png")}), "utf-8");
+   try {
+     await execFileAsync("python", [SCRIPT, specFile, out], {
+       timeout: 60_000,
+       windowsHide: true,
+     });
+   } catch (e) {
+-    if (fs.existsSync(out)) fs.unlinkSync(out);
++    fs.rmSync(out,{force:true});
++    fs.rmSync(out.replace(/\.jpg$/, ".png"),{force:true});
+     const err = e as { stderr?: string; message?: string };
+     throw new Error("Gagal menyusun desain: " + (err.stderr || err.message || "").slice(0, 300));
+   } finally {
+@@ -64,5 +67,5 @@ export async function composePromo(spec: PromoSpec): Promise<string> {
+ 
+ export function deletePromoFile(filename: string): void {
+   const p = promoPath(filename);
+-  if (p && fs.existsSync(p)) fs.unlinkSync(p);
++  if(p){fs.rmSync(p,{force:true});fs.rmSync(p.replace(/\.jpg$/, ".png"),{force:true});}
+ }
+\ No newline at end of file
+diff --git a/scripts/compose_promo.py b/scripts/compose_promo.py
+index 6942c6c..09dafef 100644
+--- a/scripts/compose_promo.py
++++ b/scripts/compose_promo.py
+@@ -60,7 +60,10 @@ def fit_font(d, text, paths, max_w, start, min_size):
+         if d.textlength(text, font=f) <= max_w:
+             return f
+         size -= 2
+-    return load_font(paths, min_size)
++    f=load_font(paths,min_size)
++    while size>2 and d.textlength(text,font=f)>max_w:
++        size-=1;f=load_font(paths,size)
++    return f
+ 
+ 
+ def wrap(d, text, font, max_w, max_lines):
+@@ -183,53 +186,45 @@ def draw_tag(d, x, y, w, h, text, st, pad):
+ 
+ 
+ def draw_text_block(d, x, y, w, h, item, st, centered, stack):
+-    nf_size = max(16, min(40, int(h * 0.14)))
+-    max_lines = 3 if st.get("hero") else 2
+-    nf = load_font(F_BOLD, nf_size)
+-    lines = wrap(d, item["name"], nf, w, max_lines)
+-    while " ".join(lines) != " ".join(item["name"].split()) and nf_size > 12:
+-        nf_size -= 2
+-        nf = load_font(F_BOLD, nf_size)
+-        lines = wrap(d, item["name"], nf, w, max_lines)
+-    line_h = int(nf_size * 1.2)
+-
+-    price = item.get("price_text") or ""
+-    old = item.get("old_text") or ""
+-    of, old_h = None, 0
+-    if old and price:
+-        of = fit_font(d, old, F_REG, w, max(14, int(h * 0.11)), 12)
+-        old_h = int(of.size * 1.3)
+-
+-    pf, tb, px, py, pill_w, pill_h = None, (0, 0, 0, 0), 0, 0, 0, 0
+-    if price:
+-        pf = fit_font(d, price, F_IMPACT, int(w * 0.84), max(24, int(h * 0.24)), 16)
+-        tb = d.textbbox((0, 0), price, font=pf)
+-        px, py = int(pf.size * 0.35), int(pf.size * 0.22)
+-        pill_w, pill_h = (tb[2] - tb[0]) + 2 * px, (tb[3] - tb[1]) + 2 * py
+-
+-    gap1, gap2 = int(h * 0.02), int(h * 0.03)
+-    total = len(lines) * line_h + (gap1 + old_h + gap2 + pill_h if price else 0)
+-    ly = y if stack else y + max(0, (h - total) // 2)
+-
++    # Allocate the available box before choosing fonts; preserve the complete price.
++    price,old=item.get('price_text') or '',item.get('old_text') or ''
++    gap=max(1,h*.025)
++    name_budget=h*(.42 if old and price else .52 if price else .94)
++    old_budget=h*.16 if old and price else 0
++    price_budget=max(1,h-name_budget-old_budget-3*gap) if price else 0
++    max_lines=3 if st.get('hero') else 2
++    nf_size=max(2,min(40,int(name_budget/max_lines/1.2)))
++    nf=load_font(F_BOLD,nf_size)
++    lines=wrap(d,item['name'],nf,max(1,w),max_lines)
++    while nf_size>2 and (' '.join(lines)!=' '.join(item['name'].split()) or len(lines)*nf_size*1.2>name_budget):
++        nf_size-=1;nf=load_font(F_BOLD,nf_size);lines=wrap(d,item['name'],nf,max(1,w),max_lines)
++    line_h=nf_size*1.2
++    of=fit_font(d,old,F_REG,w,max(2,int(old_budget*.75)),2) if old_budget else None
++    old_h=of.size*1.3 if of else 0
++    pf=fit_font(d,price,F_IMPACT,max(1,w*.84),max(2,int(price_budget*.78)),2) if price else None
++    tb=(0,0,0,0);px=py=pill_w=pill_h=0
++    if pf:
++        while True:
++            tb=d.textbbox((0,0),price,font=pf)
++            px,py=max(1,int(pf.size*.35)),max(1,int(pf.size*.22))
++            pill_w,pill_h=tb[2]-tb[0]+2*px,tb[3]-tb[1]+2*py
++            if (pill_h<=price_budget and pill_w<=w) or pf.size<=2:break
++            pf=load_font(F_IMPACT,pf.size-1)
++    total=len(lines)*line_h+(gap+old_h+gap+pill_h if price else 0)
++    ly=y if stack else y+max(0,(h-total)/2)
+     for ln in lines:
+-        d.text((cx_of(d, ln, nf, x, w, centered), ly), ln, font=nf, fill=NAME_COLOR)
+-        ly += line_h
+-    if not price:
+-        return
+-    ly += gap1
+-    if old and of:
+-        strike_text(d, cx_of(d, old, of, x, w, centered), ly, old, of, GREY)
+-        ly += old_h
+-    ly += gap2
+-
+-    pill_y = (y + h - pill_h) if stack else ly
+-    pill_x = x + (w - pill_w) / 2 if centered else x
+-    style = st["pill"]
+-    radius = pill_h // 2 if style == "pill" else int(pill_h * (0.18 if style == "rect" else 0.32))
+-    outline = st["accent"] if style == "tag" else None
+-    d.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
+-                        radius=radius, fill=st["c1"], outline=outline, width=4 if outline else 0)
+-    d.text((pill_x + px - tb[0], pill_y + py - tb[1]), price, font=pf, fill=st.get("price_ink", st["accent"]))
++        d.text((cx_of(d,ln,nf,x,w,centered),ly),ln,font=nf,fill=NAME_COLOR);ly+=line_h
++    if not price:return
++    ly+=gap
++    if of:
++        strike_text(d,cx_of(d,old,of,x,w,centered),ly,old,of,GREY);ly+=old_h
++    ly+=gap
++    pill_y=y+h-pill_h if stack else ly
++    pill_x=x+(w-pill_w)/2 if centered else x
++    style=st['pill'];radius=pill_h/2 if style=='pill' else pill_h*(.18 if style=='rect' else .32)
++    outline=st['accent'] if style=='tag' else None
++    d.rounded_rectangle([pill_x,pill_y,pill_x+pill_w,pill_y+pill_h],radius=radius,fill=st['c1'],outline=outline,width=min(4,max(1,int(pill_h/8))) if outline else 0)
++    d.text((pill_x+px-tb[0],pill_y+py-tb[1]),price,font=pf,fill=st.get('price_ink',st['accent']))
+ 
+ 
+ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+@@ -285,6 +280,14 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+     except Exception as exc:
+         raise ValueError("Foto produk gagal dibaca") from exc
+ 
++    tag = item.get('tag') or ''
++    if tag and len(tag)<=6:
++        tag_radius=int(min(w,h)*.12)
++        tag_left=x+w-2*tag_radius-pad//2
++        tag_bottom=y+2*tag_radius+pad//2
++        if tx+tw>tag_left and ty<tag_bottom:
++            reserve=max(0,tag_bottom+max(4,int(pad*.2))-ty)
++            if th-reserve>8:ty+=reserve;th-=reserve
+     draw_text_block(d, tx, ty, tw, th, item, st, centered, stack)
+ 
+     tag = item.get("tag") or ""
+@@ -354,7 +357,12 @@ def main():
+     rng = random.Random(spec.get("seed", 1))
+ 
+     fmt = spec["format"]
+-    W, H = FORMATS[fmt]
++    if fmt=='custom':
++        W,H=spec.get('width'),spec.get('height')
++        if isinstance(W,bool) or isinstance(H,bool) or not isinstance(W,int) or not isinstance(H,int) or not 512<=W<=4096 or not 512<=H<=4096 or not 1/3<=W/H<=3:
++            raise ValueError('Ukuran khusus harus 512–4096 px, rasio 1:3 sampai 3:1.')
++    else:
++        W,H=FORMATS[fmt]
+     style = spec.get("style", "retail")
+     if style not in STYLES:
+         raise ValueError("Konsep tidak valid")
+@@ -471,6 +479,17 @@ def main():
+         head = st["head"]
+         tw_max = W - 2 * margin - (60 if head == "ribbon" else 0)
+         tf = fit_font(d, title, st["tfont"], tw_max, int(H * (0.14 if landscape else 0.085)), 24)
++        if subtitle:
++            # Fit the whole header block, including subtitle pill, above the grid.
++            while tf.size>6:
++                test_box=d.textbbox((0,0),title,font=tf)
++                sf_test=fit_font(d,subtitle,F_BOLD,W-2*margin-80,max(16,int(tf.size*.38)),14)
++                sub_box=d.textbbox((0,0),subtitle,font=sf_test)
++                sub_height=sub_box[3]-sub_box[1]
++                factor=.45 if st['head']=='ribbon' else .32 if st['head']=='underline' else .25
++                bottom=int(header_h*.10)+(test_box[3]-test_box[1])+int(tf.size*factor)+sub_height+2*int(sub_height*.5)
++                if bottom<=header_h-max(4,int(gap*.4)):break
++                tf=load_font(st['tfont'],tf.size-1)
+         tb = d.textbbox((0, 0), title, font=tf)
+         tw, th = tb[2] - tb[0], tb[3] - tb[1]
+         tx = (W - tw) / 2 - tb[0]
+@@ -538,7 +557,9 @@ def main():
+     if bundle:
+         draw_bundle_panel(d, margin, H - bottom_margin - panel_h, W - 2 * margin, panel_h, bundle, st)
+ 
+-    canvas.convert("RGB").save(out, "JPEG", quality=93, optimize=True)
++    canvas.convert("RGB").save(out, "JPEG", quality=95, optimize=True)
++    if spec.get('png_output'):
++        canvas.convert('RGB').save(spec['png_output'],'PNG',optimize=True)
+     if recorder:
+         from pathlib import Path
+         Path(recorder.folder / 'document.json').write_text(json.dumps(dict(version=1, title=title or 'Promo', format=fmt,
+diff --git a/scripts/convert_promo_png.py b/scripts/convert_promo_png.py
+new file mode 100644
+index 0000000..ee991b3
+--- /dev/null
++++ b/scripts/convert_promo_png.py
+@@ -0,0 +1,9 @@
++import sys
++from PIL import Image
++Image.MAX_IMAGE_PIXELS=100_000_000
++try:
++ with Image.open(sys.argv[1]) as image:
++  image.load()
++  with open(sys.argv[2],'xb') as output:image.convert('RGB').save(output,'PNG',optimize=True)
++except Exception as error:
++ print(str(error),file=sys.stderr);sys.exit(1)
+diff --git a/tests/export-options.test.mjs b/tests/export-options.test.mjs
+new file mode 100644
+index 0000000..f5fcdd6
+--- /dev/null
++++ b/tests/export-options.test.mjs
+@@ -0,0 +1,23 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import ts from 'typescript';
++const compiled=ts.transpileModule(fs.readFileSync(new URL('../lib/design-document.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2017}}).outputText;
++const {validateCanvasSize,validateDocument,resizeDocument,newLayer}=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
++test('custom export dimensions are integer, bounded and not excessively narrow',()=>{
++ for(const [w,h] of [[1200,900],[512,512],[4096,4096],[600,1800]])assert.deepEqual(validateCanvasSize(w,h),{width:w,height:h});
++ for(const [w,h] of [[511,900],[4097,1080],[700.5,900],['1200',900],[NaN,900],[512,4096]])assert.throws(()=>validateCanvasSize(w,h));
++});
++test('custom documents survive validation and preserve text values',()=>{
++ const doc={version:1,title:'Custom',format:'custom',width:1200,height:800,layers:[newLayer('text',{text:'Rp24.799'})]};
++ assert.equal(validateDocument(doc).layers[0].text,'Rp24.799');
++ assert.throws(()=>validateDocument({...doc,width:20}));
++});
++test('custom canvas resize preserves product ratio and fills the background',()=>{
++ const photo=newLayer('image',{name:'Foto produk',assetId:crypto.randomUUID(),width:200,height:300});
++ const bg=newLayer('image',{name:'Background',assetId:crypto.randomUUID(),x:0,y:0,width:1080,height:1350});
++ const doc={version:1,title:'Test',format:'feed',width:1080,height:1350,layers:[bg,photo]};
++ const result=resizeDocument(doc,'custom',1200,700);validateDocument(result);
++ assert.equal(result.layers[0].width,1200);assert.equal(result.layers[0].height,700);
++ assert.ok(Math.abs(result.layers[1].width/result.layers[1].height-2/3)<.0001);
++});
+diff --git a/tests/smoke-phase8.mjs b/tests/smoke-phase8.mjs
+new file mode 100644
+index 0000000..25a3262
+--- /dev/null
++++ b/tests/smoke-phase8.mjs
+@@ -0,0 +1,60 @@
++import assert from 'node:assert/strict';
++import {spawn,spawnSync} from 'node:child_process';
++import {randomUUID,createHash} from 'node:crypto';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import {once} from 'node:events';
++import {createRequire} from 'node:module';
++const require=createRequire(import.meta.url),temp=fs.mkdtempSync(path.join(os.tmpdir(),'autofeeds-phase8-')),dataDir=path.join(temp,'data');
++const port=Number(process.env.PHASE8_TEST_PORT||3068),base=`http://127.0.0.1:${port}`,log=fs.openSync(path.join(temp,'server.log'),'w');
++let server,browser,complete=false;
++async function start(){server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-H','127.0.0.1','-p',String(port)],{stdio:['ignore',log,log],env:{...process.env,AUTOFEEDS_DATA_DIR:dataDir}});for(let i=0;i<80;i++){if(server.exitCode!==null)throw Error(fs.readFileSync(path.join(temp,'server.log'),'utf8'));try{if((await fetch(base+'/api/designs')).ok)return;}catch{}await new Promise(r=>setTimeout(r,200));}throw Error('Server unavailable');}
++async function stop(){if(server&&server.exitCode===null){const end=once(server,'exit');server.kill();await end;}}
++async function api(url,body,status=200,method='POST'){const r=await fetch(base+url,body===undefined?undefined:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal(r.status,status,`${url}: ${await r.clone().text()}`);return r.json();}
++function checkImage(file,w,h,kind,alpha){const code="from PIL import Image;import sys;im=Image.open(sys.argv[1]);assert im.size==(int(sys.argv[2]),int(sys.argv[3])),im.size;assert im.format==sys.argv[4];"+(alpha==='transparent'?"assert im.mode=='RGBA';assert im.getpixel((0,0))[3]==0;assert im.getchannel('A').getbbox() is not None":alpha==='white'?"assert im.convert('RGB').getpixel((0,0))==(255,255,255)":"");const result=spawnSync('python',['-c',code,file,String(w),String(h),kind]);assert.equal(result.status,0,result.stderr.toString());}
++const hash=data=>createHash('sha256').update(data).digest('hex');
++try{
++ const fixture=path.join(temp,'photo.png');const setup=spawnSync('python',['-c',`from PIL import Image,ImageDraw,ImageFont
++import sys
++im=Image.new('RGBA',(600,800),(0,0,0,0));d=ImageDraw.Draw(im);d.rounded_rectangle((80,40,520,760),radius=30,fill='#dc2626');d.rectangle((90,240,510,490),fill='#facc15');font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',34);d.text((135,295),'FOTO CONTOH',font=font,fill='#7f1d1d');d.text((200,360),'DEMO',font=font,fill='#7f1d1d');im.save(sys.argv[1])`,fixture]);assert.equal(setup.status,0,setup.stderr.toString());
++ await start();for(const route of ['/dashboard','/upload','/image-studio','/analyzer','/promo','/editor','/brand-kit','/content-studio','/library','/history','/settings'])assert.equal((await fetch(base+route)).status,200);
++ const form=new FormData();form.append('file',new Blob([fs.readFileSync(fixture)],{type:'image/png'}),'Produk DEMO.png');const uploaded=await fetch(base+'/api/images',{method:'POST',body:form});assert.equal(uploaded.status,201);const {id:imageId}=await uploaded.json();
++ const original=hash(Buffer.from(await(await fetch(base+`/api/image-file?id=${imageId}`)).arrayBuffer()));
++ let first,custom,firstDoc;
++ for(const [format,width,height]of [['feed',1080,1350],['square',1080,1080],['story',1080,1920],['landscape',1200,630],['custom',1200,800]]){
++  const poster=await api('/api/promo',{count:format==='custom'?4:1,format,width,height,theme:'merah',style:'flash',brand_kit_id:0,promo_type:'harga_spesial',title:'PROMO DEMO',subtitle:'Contoh tampilan, bukan penawaran',footer:'ANTOFROZEN • DATA DEMO',items:[{image_id:imageId,name:'Nugget Ayam 500 g — DEMO',price:'24799',old_price:'30999'}]},201);
++  if(!first)first=poster;if(format==='custom')custom=poster;
++  for(const kind of ['jpg','png']){const r=await fetch(base+`/api/promo-file?id=${poster.id}&format=${kind}&download=1`);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),kind==='png'?'image/png':'image/jpeg');const file=path.join(temp,`${format}.${kind}`);fs.writeFileSync(file,Buffer.from(await r.arrayBuffer()));checkImage(file,width,height,kind==='png'?'PNG':'JPEG');}
++  if(!firstDoc)firstDoc=await api('/api/designs',{promo_id:poster.id},201);
++ }
++ assert.equal((await fetch(base+`/api/promo-file?id=${first.id}&format=gif`)).status,400);
++ const again=await api('/api/promo',{regenerate_id:custom.id},201);const edited=await api('/api/designs',{promo_id:again.id},201);assert.equal(edited.doc.width,1200);assert.equal(edited.doc.height,800);assert.equal(edited.doc.format,'custom');
++ for(const [width,height]of [[511,800],[4097,900],[512,4096],[900.5,900]]){await api('/api/designs',{format:'custom',width,height},400);await api('/api/promo',{count:1,format:'custom',width,height,theme:'merah',style:'retail',promo_type:'harga_spesial',items:[{image_id:imageId,price:'25000'}]},400);}
++ const promoDir=path.join(dataDir,'storage','uploads','promo');for(const file of fs.readdirSync(promoDir).filter(f=>f.endsWith('.png')))fs.unlinkSync(path.join(promoDir,file));
++ const fallback=await fetch(base+`/api/promo-file?id=${first.id}&format=png&download=1`);assert.equal(fallback.status,200);const oldPng=path.join(temp,'legacy.png');fs.writeFileSync(oldPng,Buffer.from(await fallback.arrayBuffer()));checkImage(oldPng,1080,1350,'PNG');
++ const transparent=await api('/api/designs',{format:'custom',width:960,height:720},201);transparent.doc.layers[0].visible=false;transparent.doc.layers.push({id:randomUUID(),name:'Harga DEMO',kind:'text',x:80,y:100,width:600,height:70,rotation:0,opacity:1,visible:true,locked:false,fill:'#dc2626',stroke:'none',strokeWidth:0,text:'Rp24.799 — DEMO',fontFamily:'Arial',fontSize:54,baseline:.8,bold:true});await api('/api/designs',{id:transparent.id,revision:1,doc:transparent.doc},200,'PATCH');
++ if(process.env.PHASE8_UI==='1'){
++  const {chromium}=require('playwright');let executablePath=process.env.PHASE8_CHROMIUM||chromium.executablePath(),args=['--no-sandbox'];
++  if(process.env.PHASE8_BROWSER_MODULE){const portable=(await import(process.env.PHASE8_BROWSER_MODULE)).default;executablePath=await portable.executablePath();args=portable.args;}
++  browser=await chromium.launch({executablePath,args,headless:true});const page=await browser.newPage({viewport:{width:1600,height:1150},acceptDownloads:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
++  async function downloaded(name){const event=page.waitForEvent('download');await page.getByRole('button',{name,exact:true}).click();return await(await event).path();}
++  await page.goto(base+`/editor?id=${transparent.id}`);await page.getByLabel('Nama desain',{exact:true}).waitFor();
++  checkImage(await downloaded('Unduh PNG'),960,720,'PNG','transparent');checkImage(await downloaded('Unduh JPG'),960,720,'JPEG','white');
++  await page.getByLabel('Kualitas JPG',{exact:true}).selectOption('0.85');const low=fs.readFileSync(await downloaded('Unduh JPG'));await page.getByLabel('Kualitas JPG',{exact:true}).selectOption('1');const high=fs.readFileSync(await downloaded('Unduh JPG'));assert.notEqual(hash(low),hash(high));
++  await page.getByLabel('Lebar khusus',{exact:true}).fill('1360');await page.getByLabel('Tinggi khusus',{exact:true}).fill('900');await page.getByRole('button',{name:'Terapkan ukuran',exact:true}).click();await page.getByRole('button',{name:/^Simpan/}).click();await page.getByRole('status').filter({hasText:'Perubahan tersimpan'}).waitFor();
++  checkImage(await downloaded('Unduh PNG'),1360,900,'PNG','transparent');const xml=fs.readFileSync(await downloaded('Unduh SVG'),'utf8');assert.ok(xml.includes('width="1360"'));assert.ok(xml.includes('Rp24.799'));
++  await page.goto(base+`/editor?id=${edited.id}`);await page.getByLabel('Nama desain',{exact:true}).waitFor();await page.getByLabel('Lebar khusus',{exact:true}).fill('1200');await page.getByLabel('Tinggi khusus',{exact:true}).fill('800');
++  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:'/workspace/scratch/7f31e9a383e5/AUTOFEEDS-fase8-editor.png',fullPage:true,animations:'disabled'});
++  await page.goto(base+'/promo');await page.getByRole('button',{name:'Produk DEMO.png'}).click();await page.getByLabel(/Harga promo/).fill('24799');await page.getByLabel(/Harga coret/).fill('30999');await page.getByLabel('Ukuran',{exact:true}).selectOption('custom');await page.getByLabel('Lebar poster khusus',{exact:true}).fill('1200');await page.getByLabel('Tinggi poster khusus',{exact:true}).fill('800');await page.getByRole('button',{name:'Buat 4 variasi desain',exact:true}).click();await page.getByRole('img',{name:'Hasil desain promo',exact:true}).waitFor();
++  const pngEvent=page.waitForEvent('download');await page.getByRole('link',{name:'Unduh PNG',exact:true}).click();checkImage(await(await pngEvent).path(),1200,800,'PNG');
++  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('aside').getBoundingClientRect().right<=0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:'/workspace/scratch/7f31e9a383e5/AUTOFEEDS-fase8-mobile.png',fullPage:true,animations:'disabled'});assert.deepEqual(errors,[]);await browser.close();browser=undefined;
++  console.log('PASS browser: transparent PNG, white JPG, actual JPG quality changes, exact 960×720/1360×900 exports, SVG, custom Composer batch/PNG, desktop/mobile.');
++ }
++ await stop();await start();const persisted=await api(`/api/designs?id=${transparent.id}`);assert.ok([960,1360].includes(persisted.doc.width));assert.equal((await fetch(base+`/api/promo-file?id=${custom.id}&format=png`)).status,200);
++ assert.equal(hash(Buffer.from(await(await fetch(base+`/api/image-file?id=${imageId}`)).arrayBuffer())),original);
++ console.log('PASS API: all four presets, custom batch, exact JPG/PNG dimensions and MIME, invalid size rejection, legacy PNG conversion, custom regeneration/editor, restart persistence and original photo integrity.');complete=true;
++}finally{
++ if(!complete)console.error(fs.readFileSync(path.join(temp,'server.log'),'utf8'));
++ await browser?.close();await stop();fs.closeSync(log);fs.rmSync(temp,{recursive:true,force:true});
++}
+diff --git a/tests/test_export.py b/tests/test_export.py
+new file mode 100644
+index 0000000..4f0d6fa
+--- /dev/null
++++ b/tests/test_export.py
+@@ -0,0 +1,41 @@
++import itertools,json,subprocess,sys,tempfile,unittest
++from pathlib import Path
++from PIL import Image
++ROOT=Path(__file__).resolve().parents[1]
++sys.path.insert(0,str(ROOT/'scripts'))
++from creative_layout import STYLES
++
++class ExportTests(unittest.TestCase):
++ def test_custom_jpeg_and_lossless_png_dimensions_and_complete_price(self):
++  with tempfile.TemporaryDirectory() as tmp:
++   folder=Path(tmp);source=folder/'photo.png';Image.new('RGBA',(400,500),'#d62638').save(source)
++   original=source.read_bytes()
++   for i,(style,size,mode) in enumerate(itertools.product(STYLES,[(512,512),(1200,800),(600,1600),(1536,512)],['items','bundle'])):
++    with self.subTest(style=style,size=size,mode=mode):
++     case=folder/str(i);case.mkdir()
++     spec=dict(format='custom',width=size[0],height=size[1],theme='merah',seed=42,style=style,layout_variant=i%2,mode=mode,title='PROMO AKHIR PEKAN',subtitle='Berlaku pekan ini',footer='ANTOFROZEN • Pesan via WhatsApp',badge='PROMO',items=[dict(path=str(source),name='Nugget Ayam Original 500 gram',price_text='Rp24.799' if mode=='items' else '',old_text='Rp30.999' if mode=='items' else '',tag='-20%' if mode=='items' else '')]*6,bundle=dict(label='PAKET HEMAT',price_text='Rp125.000',old_text='Rp150.000',tag='HEMAT Rp25.000'),png_output=str(case/'poster.png'))
++     (case/'spec.json').write_text(json.dumps(spec))
++     subprocess.run([sys.executable,str(ROOT/'scripts/compose_promo.py'),str(case/'spec.json'),str(case/'poster.jpg'),str(case)],check=True,capture_output=True)
++     for extension in ['jpg','png']:
++      with Image.open(case/f'poster.{extension}') as output:self.assertEqual(output.size,size)
++     doc=json.loads((case/'document.json').read_text());self.assertEqual(doc['format'],'custom')
++     expected='Rp24.799' if mode=='items' else 'Rp125.000'
++     prices=[l for l in doc['layers'] if l.get('text')==expected];self.assertEqual(len(prices),6 if mode=='items' else 1)
++     if mode=='items':
++      for index,layer in enumerate(doc['layers']):
++       if layer.get('text')=='Rp24.799':
++        old=[l for l in doc['layers'][:index] if l.get('text')=='Rp30.999'][-1]
++        self.assertLessEqual(old['y']+old['height'],layer['y']+1)
++     for layer in doc['layers']:
++      if layer['kind']=='text':
++       self.assertGreaterEqual(layer['x'],-1)
++       self.assertLessEqual(layer['x']+layer['width'],size[0]+1)
++       self.assertLessEqual(layer['y']+layer['height'],size[1]+1)
++   self.assertEqual(source.read_bytes(),original)
++ def test_invalid_custom_size_rejected_before_render(self):
++  with tempfile.TemporaryDirectory() as tmp:
++   folder=Path(tmp);spec=folder/'spec.json';spec.write_text(json.dumps(dict(format='custom',width=100,height=900,items=[])))
++   result=subprocess.run([sys.executable,str(ROOT/'scripts/compose_promo.py'),str(spec),str(folder/'out.jpg')],capture_output=True)
++   self.assertNotEqual(result.returncode,0);self.assertFalse((folder/'out.jpg').exists())
++
++if __name__=='__main__':unittest.main()

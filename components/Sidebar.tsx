@@ -7,6 +7,9 @@ import {
   LayoutDashboard,
   Upload,
   ScanSearch,
+  ImagePlus,
+  PenTool,
+  Palette,
   Sparkles,
   Megaphone,
   Library,
@@ -29,9 +32,11 @@ const GROUPS: { title: string | null; items: Item[] }[] = [
     title: "Alur kerja",
     items: [
       { href: "/upload", label: "Image Upload", icon: Upload },
+      { href: "/image-studio", label: "Product Image Studio", icon: ImagePlus },
       { href: "/analyzer", label: "AI Image Analyzer", icon: ScanSearch },
       { href: "/content-studio", label: "Content Studio", icon: Sparkles },
       { href: "/promo", label: "Promo Composer", icon: Megaphone },
+      { href: "/editor", label: "Design Editor", icon: PenTool },
     ],
   },
   {
@@ -39,6 +44,7 @@ const GROUPS: { title: string | null; items: Item[] }[] = [
     items: [
       { href: "/library", label: "Content Library", icon: Library },
       { href: "/history", label: "History", icon: History },
+      { href: "/brand-kit", label: "Brand Kit", icon: Palette },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },

@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import type {BrandKit} from "@/lib/brand-options";
 import { useCallback, useEffect, useState } from "react";
 import {
   Loader2,
@@ -32,12 +33,17 @@ type Item = {
   is_edited: number;
   is_saved: number;
   created_at: string;
+  language?: string | null;
+  brand_name?: string | null;
+  can_regenerate?: number;
 };
 
 const typeLabel = (id: string) => CONTENT_TYPES.find((t) => t.id === id)?.label ?? id;
 const toneLabel = (id: string | null) => TONES.find((t) => t.id === id)?.label ?? "";
 
 export default function ContentStudioPage() {
+  const [metadataLoading,setMetadataLoading]=useState(true);
+  const [brands,setBrands]=useState<BrandKit[]>([]),[brandId,setBrandId]=useState(0),[language,setLanguage]=useState("id"),[manualMode,setManualMode]=useState(false);
   const [images, setImages] = useState<Img[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -65,6 +71,7 @@ export default function ContentStudioPage() {
   const loadContents = useCallback(async (imageId: number) => {
     const res = await fetch(`/api/content?image_id=${imageId}`, { cache: "no-store" });
     const data = await res.json();
+    if(!res.ok)throw new Error(data.error||"Gagal memuat konten.");
     const list: Item[] = data.contents ?? [];
     setItems(list);
     setDrafts(Object.fromEntries(list.map((i) => [i.id, i.content])));
@@ -75,10 +82,16 @@ export default function ContentStudioPage() {
       try {
         const res = await fetch("/api/images", { cache: "no-store" });
         const data = await res.json();
+        if(!res.ok)throw new Error(data.error||'Gagal memuat gambar.');
         setImages(data.images ?? []);
+        const [kitResponse,settingsResponse]=await Promise.all([fetch('/api/brand-kits',{cache:'no-store'}),fetch('/api/settings',{cache:'no-store'})]);
+        const kits=await kitResponse.json(),settings=await settingsResponse.json();
+        if(!kitResponse.ok||!settingsResponse.ok)throw new Error('Gagal memuat pengaturan konten.');
+        setBrands(kits.kits);const kit=kits.kits.find((k:BrandKit)=>k.is_default);
+        if(kit){setBrandId(kit.id);setTone(kit.tone);setLanguage(kit.language);}else setLanguage(settings.settings.default_language||'id');
       } catch {
-        setError("Gagal memuat daftar gambar.");
-      }
+        setError("Gagal memuat daftar gambar atau pengaturan konten.");
+      } finally { setMetadataLoading(false); }
     })();
   }, []);
 
@@ -86,6 +99,8 @@ export default function ContentStudioPage() {
     setSelected(id);
     setError("");
     setAnalysis(null);
+    setForm({description:"",objects:"",dominant_colors:"",visible_text:"",context:""});
+    setManualMode(false);
     setItems([]);
     try {
       const res = await fetch(`/api/analyze?image_id=${id}`, { cache: "no-store" });
@@ -108,7 +123,7 @@ export default function ContentStudioPage() {
   }
 
   async function saveAnalysis(): Promise<boolean> {
-    if (!analysis) return false;
+    if (!analysis || manualMode) return true;
     const res = await fetch("/api/analysis", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -136,6 +151,9 @@ export default function ContentStudioPage() {
           content_type: useType,
           tone: useTone,
           extra,
+          language,
+          brand_kit_id: brandId,
+          ...(!analysis||manualMode?{manual_facts:form}:{}),
         }),
       });
       const data = await res.json();
@@ -146,6 +164,11 @@ export default function ContentStudioPage() {
     } finally {
       setGenerating(false);
     }
+  }
+
+  async function regenerate(id:number){
+    if(selected===null)return;setGenerating(true);setError("");
+    try{const response=await fetch('/api/content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_content_id:id})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Gagal membuat ulang konten.');await loadContents(selected);flash('Konten baru dibuat dari fakta dan brand tersimpan.');}catch(e){setError((e as Error).message);}finally{setGenerating(false);}
   }
 
   async function patchItem(item: Item, patch: { content?: string; is_saved?: boolean }) {
@@ -227,6 +250,7 @@ export default function ContentStudioPage() {
         </div>
       )}
 
+      <fieldset disabled={generating||metadataLoading} className="min-w-0">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
           <h2 className="mb-3 text-sm font-semibold text-slate-900">Pilih gambar ({images.length})</h2>
@@ -262,16 +286,14 @@ export default function ContentStudioPage() {
             <div className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm ring-1 ring-slate-200">
               Pilih satu gambar di sebelah kiri.
             </div>
-          ) : !analysis ? (
-            <div className="rounded-2xl bg-white p-6 text-sm text-slate-600 shadow-sm ring-1 ring-slate-200">
-              Gambar ini belum dianalisis. Buka menu <b>AI Image Analyzer</b>, jalankan analisis, lalu kembali ke sini.
-            </div>
           ) : (
             <>
               <div className="space-y-3 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
                 <h2 className="text-sm font-semibold text-slate-900">
-                  Hasil analisis (boleh diedit jika ada yang keliru)
+                  {analysis&&!manualMode?"Hasil analisis (boleh diedit jika ada yang keliru)":"Fakta produk manual"}
                 </h2>
+                {analysis&&<label className="flex gap-2 text-sm"><input type="checkbox" checked={manualMode} onChange={e=>setManualMode(e.target.checked)}/>Gunakan fakta manual untuk pembuatan ini</label>}
+                {!analysis&&<p className="text-xs text-slate-500">Belum ada analisis. Isi fakta produk yang Anda ketahui, atau jalankan AI Image Analyzer terlebih dahulu.</p>}
                 {field("description", "Deskripsi", 3)}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {field("objects", "Objek / produk")}
@@ -292,6 +314,7 @@ export default function ContentStudioPage() {
               </div>
 
               <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Brand Kit<select aria-label="Brand Kit konten" value={brandId} onChange={e=>{const id=Number(e.target.value);setBrandId(id);const kit=brands.find(k=>k.id===id);if(kit){setTone(kit.tone);setLanguage(kit.language);}}} className="mt-1 w-full rounded-lg border border-slate-300 p-2"><option value={0}>Tanpa Brand Kit</option>{brands.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}</select></label><label className="text-sm">Bahasa hasil<select aria-label="Bahasa hasil" value={language} onChange={e=>setLanguage(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 p-2"><option value="id">Indonesia</option><option value="en">English</option></select></label></div>
                 <div>
                   <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                     Jenis konten
@@ -342,7 +365,7 @@ export default function ContentStudioPage() {
                 </button>
                 {generating && (
                   <p className="text-xs text-slate-500">
-                    Model teks berjalan di CPU, biasanya 10 detik sampai 1 menit.
+                    Menunggu Ollama yang terpasang. Durasi bergantung pada model dan perangkat.
                   </p>
                 )}
               </div>
@@ -356,6 +379,7 @@ export default function ContentStudioPage() {
                     return (
                       <div
                         key={item.id}
+                        data-content-id={item.id}
                         className="space-y-3 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200"
                       >
                         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -367,6 +391,8 @@ export default function ContentStudioPage() {
                               {toneLabel(item.tone)}
                             </span>
                           )}
+                          {item.brand_name&&<span className="rounded-full bg-slate-100 px-3 py-1">{item.brand_name}</span>}
+                          {item.language&&<span className="text-slate-500">{item.language==='en'?'English':'Indonesia'}</span>}
                           {item.is_saved === 1 && (
                             <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-700">
                               Tersimpan di Library
@@ -420,7 +446,7 @@ export default function ContentStudioPage() {
                           </button>
                           <button
                             onClick={() =>
-                              generate(item.content_type, item.tone ?? tone)
+                              item.can_regenerate?regenerate(item.id):generate(item.content_type, item.tone ?? tone)
                             }
                             disabled={generating}
                             className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-2 text-slate-700 hover:bg-slate-200 disabled:opacity-60"
@@ -443,6 +469,7 @@ export default function ContentStudioPage() {
           )}
         </section>
       </div>
+      </fieldset>
     </div>
   );
 }

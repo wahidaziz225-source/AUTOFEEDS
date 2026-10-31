@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SCHEMA_SQL, DEFAULT_SETTINGS, DEFAULT_CATEGORIES } from "./schema";
 
-const DB_DIR = path.join(process.cwd(), "database");
+const DB_DIR = path.join(process.env.AUTOFEEDS_DATA_DIR || process.cwd(), "database");
 export const DB_PATH = path.join(DB_DIR, "autofeeds.db");
 
 // Satu koneksi saja, tetap aman saat Next.js memuat ulang kode di mode dev

@@ -1,0 +1,929 @@
+diff --git a/README.md b/README.md
+index 362142c..475e710 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ Studio konten promosi lokal: unggah foto produk, analisis melalui Ollama, buat caption dan poster, serta siapkan foto produk tanpa menimpa sumber asli.
+ 
+-Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Fase 3 Creative Layout Engine dan Fase 4 Product Image Studio.
++Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), dan batch variasi desain (Fase 5).
+ 
+ ## Menjalankan di Windows 11
+ 
+@@ -24,6 +24,7 @@ Buka `http://localhost:3000`. Saat memperbarui proyek yang sudah ada, hentikan s
+ - Analyzer dan Content Studio berbasis Ollama; model dipilih melalui Settings dan harus sudah terpasang.
+ - Promo Composer: 1–6 produk atau bundling, harga tervalidasi, enam konsep komposisi, empat ukuran poster dan unduhan JPG.
+ - Product Image Studio: pencahayaan, kontras, ketajaman, isolasi produk opsional, background transparan/warna, ukuran/posisi, bayangan, riwayat varian dan unduhan PNG foto.
++- Batch 4–6 poster dengan konsep berbeda, galeri perbandingan, desain pilihan, dan pembuatan ulang dari pengaturan tersimpan.
+ - Pemilihan foto asli atau varian olahan untuk setiap produk di Promo Composer.
+ - Content Library, History dan Settings.
+ 
+@@ -51,14 +52,16 @@ npm run build
+ node --test tests/*.test.mjs
+ python -m unittest discover -s tests -p "test_*.py"
+ node tests/smoke-phase4.mjs
++node tests/smoke-phase5.mjs
+ ```
+ 
+-Smoke test memerlukan build yang telah selesai, port 3064 yang bebas, dan Python/Pillow. Ia membuat/menghapus record fixture sendiri; log aktivitas tetap tercatat. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
++Smoke test memerlukan build yang telah selesai, port 3064 dan 3065 yang bebas, dan Python/Pillow. Smoke test memakai direktori data sementara dan membersihkannya setelah selesai. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
+ 
+ ## Dokumentasi dan batas fase
+ 
+ - [Audit dan perubahan Fase 3](docs/AUDIT-FASE-3.md).
+ - [Panduan Fase 4](docs/FASE-4-PENGOLAHAN-FOTO.md).
+ - [Hasil validasi dan batas pengujian Fase 4](docs/VALIDASI-FASE-4.md).
++- [Fase 5: variasi desain dan hasil validasi](docs/FASE-5-VARIASI-DESAIN.md).
+ 
+-Batch variasi 4–6 poster, editor layer, Brand Kit aktif, dan ekspor PNG poster tetap fase berikutnya. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.
++Editor layer, Brand Kit aktif, dan ekspor PNG poster tetap fase berikutnya. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.
+diff --git a/app/api/promo/route.ts b/app/api/promo/route.ts
+index 79a8a5c..e12f784 100644
+--- a/app/api/promo/route.ts
++++ b/app/api/promo/route.ts
+@@ -1,3 +1,5 @@
++import fs from "node:fs";
++import { createPromoBatch, nextVariationStyle, variationCount, variationStyles } from "@/lib/promo-variations";
+ import crypto from "node:crypto";
+ import { NextResponse } from "next/server";
+ import { getDb, logActivity } from "@/lib/db";
+@@ -19,18 +21,52 @@ import { resolveUploadPath } from "@/lib/storage";
+ const clean = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+ const bad = (error: string, status = 400) => NextResponse.json({ error }, { status });
+ 
+-export async function GET() {
+-  const rows = getDb()
+-    .prepare(
+-      "SELECT id, title, layout_format, theme, created_at FROM promo_designs ORDER BY id DESC LIMIT 50"
+-    )
+-    .all();
+-  return NextResponse.json({ designs: rows });
++const g = globalThis as unknown as { __promoGenerationBusy?: boolean };
++const SELECT = `SELECT p.id, p.title, p.layout_format, p.theme, p.created_at,
++  m.batch_id, m.style, COALESCE(m.is_saved, 0) AS is_saved,
++  CASE WHEN m.request_json IS NOT NULL AND m.request_json != '' THEN 1 ELSE 0 END AS can_regenerate
++  FROM promo_designs p LEFT JOIN promo_generation m ON m.design_id = p.id`;
++
++export async function GET(req: Request) {
++  const query = new URL(req.url).searchParams;
++  const batch = query.get("batch_id");
++  const rows = batch
++    ? getDb().prepare(`${SELECT} WHERE m.batch_id = ? ORDER BY p.id LIMIT 6`).all(batch)
++    : getDb().prepare(`${SELECT} ${query.get("saved") === "1" ? "WHERE m.is_saved = 1" : ""} ORDER BY p.id DESC LIMIT 100`).all();
++  return NextResponse.json({ designs: rows, generating: Boolean(g.__promoGenerationBusy) });
+ }
+ 
+ export async function POST(req: Request) {
++  if (g.__promoGenerationBusy) return bad("Masih ada desain yang dibuat. Tunggu sampai selesai.", 409);
++  g.__promoGenerationBusy = true;
+   try {
+-    const body = (await req.json()) as Record<string, unknown>;
++    let body: Record<string, unknown>;
++    try {
++      const parsed = await req.json();
++      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return bad("Permintaan tidak valid.");
++      body = parsed;
++    } catch { return bad("JSON tidak valid."); }
++    let count: number;
++    try { count = variationCount(body.count); } catch (e) { return bad((e as Error).message); }
++    const isRegenerate = body.regenerate_id !== undefined;
++    const isMore = body.source_id !== undefined;
++    let parentId: number | null = null;
++    let layoutVariant = crypto.randomInt(0, 2);
++    if (isRegenerate && isMore) return bad("Pilih satu tindakan pembuatan variasi.");
++    if (isRegenerate || isMore) {
++      parentId = Number(body.regenerate_id ?? body.source_id);
++      if (!Number.isSafeInteger(parentId) || parentId <= 0) return bad("ID desain tidak valid.");
++      const source = getDb().prepare(`SELECT m.request_json, m.style, m.layout_variant FROM promo_designs p
++        LEFT JOIN promo_generation m ON m.design_id = p.id WHERE p.id = ?`).get(parentId) as
++        { request_json: string | null; style: string | null; layout_variant: number | null } | undefined;
++      if (!source) return bad("Desain tidak ditemukan.", 404);
++      if (!source.request_json) return bad("Desain lama belum menyimpan pengaturan. Buat desain baru dari formulir terlebih dahulu.", 409);
++      body = JSON.parse(source.request_json) as Record<string, unknown>;
++      layoutVariant = source.layout_variant === 1 ? 0 : 1;
++      body.style = nextVariationStyle(source.style ?? "retail");
++      if (isRegenerate) count = 1;
++      else if (count === 1) return bad("Variasi tambahan harus berjumlah 4, 5, atau 6.");
++    }
+     const format = clean(body.format, 20);
+     const theme = clean(body.theme, 20);
+     const type = clean(body.promo_type, 20);
+@@ -91,7 +127,7 @@ export async function POST(req: Request) {
+         if (!variant) return bad("Varian foto tidak ditemukan untuk produk ini.", 404);
+         p = processedPath(variant.stored_filename);
+       }
+-      if (!p) return bad("File gambar tidak valid.");
++      if (!p || !fs.existsSync(p)) return bad("File foto sumber tidak ditemukan. Pilih foto atau varian yang masih tersedia.", 404);
+       const name = clean(r.name, 60) || row.name;
+       const price = clean(r.price, 30);
+       const oldPrice = clean(r.old_price, 30);
+@@ -140,43 +176,63 @@ export async function POST(req: Request) {
+       items,
+       bundle,
+     };
+-    const filename = await composePromo(spec);
+-
+-    const result = db
+-      .prepare(
+-        `INSERT INTO promo_designs (title, layout_format, theme, items_json, output_filename)
+-         VALUES (?, ?, ?, ?, ?)`
+-      )
+-      .run(
+-        title || "Promo",
+-        format,
+-        theme,
+-        JSON.stringify({
+-          promo_type: type,
+-          style,
+-          seed,
+-          items: items.map((i) => ({
+-            image_id: i.image_id,
+-            variant_id: i.variant_id,
+-            name: i.name,
+-            price: i.price_text,
+-            old: i.old_text,
+-            tag: i.tag,
+-          })),
+-          bundle,
+-        }),
+-        filename
+-      );
+-    const id = Number(result.lastInsertRowid);
+-    logActivity("Buat desain promo", "promo", id, `${type}, ${items.length} produk`);
+-    return NextResponse.json({ id }, { status: 201 });
++    const styles = variationStyles(style, count, crypto.randomInt(0, 5));
++    const request = {
++      format, theme, promo_type: type, title, subtitle: spec.subtitle, footer: spec.footer, badge: spec.badge,
++      discount_percent: params.discountPercent, discount_amount: params.discountAmount,
++      buy_qty: params.buyQty, free_qty: params.freeQty, bundle_price: params.bundlePrice,
++      items: rawItems.map((r, index) => ({ image_id: Number(r.image_id), variant_id: r.variant_id == null ? null : Number(r.variant_id),
++        name: items[index].name, price: clean(r.price, 30), old_price: clean(r.old_price, 30) })),
++    };
++    const batchId = crypto.randomUUID();
++    const specs = styles.map((concept, index) => ({ ...spec, style: concept, layout_variant: layoutVariant,
++      seed: (seed + index) % 2_000_000_000 }));
++    const designs = await createPromoBatch(count, index => composePromo(specs[index]), files => db.transaction(() => {
++      const ids: number[] = [];
++      for (let index = 0; index < files.length; index++) {
++        const current = specs[index];
++        const meta = { promo_type: type, style: current.style, seed: current.seed, layout_variant: layoutVariant,
++          items: items.map(i => ({ image_id: i.image_id, variant_id: i.variant_id, name: i.name, price: i.price_text, old: i.old_text, tag: i.tag })), bundle };
++        const result = db.prepare(`INSERT INTO promo_designs (title, layout_format, theme, items_json, output_filename) VALUES (?, ?, ?, ?, ?)`)
++          .run(title || "Promo", format, theme, JSON.stringify(meta), files[index]);
++        const id = Number(result.lastInsertRowid);
++        db.prepare(`INSERT INTO promo_generation (design_id, batch_id, request_json, style, seed, layout_variant, parent_design_id) VALUES (?, ?, ?, ?, ?, ?, ?)`)
++          .run(id, batchId, JSON.stringify({ ...request, style: current.style }), current.style, current.seed, layoutVariant, parentId);
++        ids.push(id);
++        logActivity(isRegenerate ? "Buat ulang desain promo" : "Buat desain promo", "promo", id, `${current.style}; batch ${batchId}`);
++      }
++      return ids.map(id => db.prepare(`${SELECT} WHERE p.id = ?`).get(id));
++    })(), deletePromoFile);
++    return NextResponse.json({ id: (designs[0] as { id: number }).id, batch_id: batchId, designs }, { status: 201 });
+   } catch (e) {
+     return bad(e instanceof Error ? e.message : "Gagal membuat desain.", 500);
++  } finally {
++    g.__promoGenerationBusy = false;
+   }
+ }
+ 
++export async function PATCH(req: Request) {
++  try {
++    const body = await req.json();
++    if (!body || typeof body !== "object") return bad("Permintaan tidak valid.");
++    const id = Number(body.id);
++    if (!Number.isSafeInteger(id) || id <= 0 || typeof body.is_saved !== "boolean") return bad("Status simpan tidak valid.");
++    const db = getDb();
++    if (!db.prepare("SELECT id FROM promo_designs WHERE id = ?").get(id)) return bad("Desain tidak ditemukan.", 404);
++    db.transaction(() => {
++      // Legacy JPGs can be bookmarked without inventing regeneration settings.
++      db.prepare(`INSERT INTO promo_generation (design_id, batch_id, request_json, style, seed, is_saved)
++        VALUES (?, ?, '', '', 0, ?) ON CONFLICT(design_id) DO UPDATE SET is_saved = excluded.is_saved`)
++        .run(id, crypto.randomUUID(), body.is_saved ? 1 : 0);
++      logActivity(body.is_saved ? "Simpan desain pilihan" : "Lepas desain pilihan", "promo", id, null);
++    })();
++    return NextResponse.json({ ok: true });
++  } catch { return bad("Permintaan simpan tidak valid."); }
++}
++
+ // DELETE /api/promo?id=5
+ export async function DELETE(req: Request) {
++  if (g.__promoGenerationBusy) return bad("Tunggu proses pembuatan desain selesai sebelum menghapus.", 409);
+   const id = Number(new URL(req.url).searchParams.get("id"));
+   if (!Number.isInteger(id) || id <= 0) return bad("ID tidak valid.");
+   const db = getDb();
+diff --git a/app/promo/page.tsx b/app/promo/page.tsx
+index a237214..6d846c9 100644
+--- a/app/promo/page.tsx
++++ b/app/promo/page.tsx
+@@ -19,7 +19,7 @@ import {
+ 
+ type Img = { id: number; name: string };
+ type Sel = { imageId: number; name: string; price: string; oldPrice: string; variantId: number | null };
+-type Design = { id: number; title: string; layout_format: string; created_at: string };
++type Design = { id: number; title: string; layout_format: string; created_at: string; batch_id: string | null; style: string | null; is_saved: number; can_regenerate: number };
+ 
+ const inputCls =
+   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900";
+@@ -44,6 +44,11 @@ export default function PromoPage() {
+   const [busy, setBusy] = useState(false);
+   const [error, setError] = useState("");
+   const [resultId, setResultId] = useState<number | null>(null);
++  const [count, setCount] = useState(4);
++  const [results, setResults] = useState<Design[]>([]);
++  const [savedDesigns, setSavedDesigns] = useState<Design[]>([]);
++  const [savedOnly, setSavedOnly] = useState(false);
++  const [notice, setNotice] = useState("");
+   const [designs, setDesigns] = useState<Design[]>([]);
+ 
+   const typeInfo = PROMO_TYPES.find((t) => t.id === type) ?? PROMO_TYPES[0];
+@@ -58,11 +63,14 @@ export default function PromoPage() {
+ 
+   const loadDesigns = useCallback(async () => {
+     try {
+-      const res = await fetch("/api/promo", { cache: "no-store" });
+-      const data = await res.json();
+-      setDesigns(data.designs ?? []);
++      const [res, savedRes] = await Promise.all([
++        fetch("/api/promo", { cache: "no-store" }), fetch("/api/promo?saved=1", { cache: "no-store" }),
++      ]);
++      const [data, savedData] = await Promise.all([res.json(), savedRes.json()]);
++      if (!res.ok || !savedRes.ok) throw new Error("Gagal memuat riwayat desain.");
++      setDesigns(data.designs ?? []); setSavedDesigns(savedData.designs ?? []);
+     } catch {
+-      /* riwayat desain opsional */
++      setError("Gagal memuat riwayat desain. Muat ulang halaman untuk mencoba lagi.");
+     }
+   }, []);
+ 
+@@ -117,7 +125,7 @@ export default function PromoPage() {
+   }
+ 
+   async function generate() {
+-    setError("");
++    setError(""); setNotice("");
+     if (sel.length === 0) return setError("Pilih minimal 1 gambar.");
+     if (type === "bundling") {
+       if (sel.length < 2) return setError("Paket bundling butuh minimal 2 produk.");
+@@ -133,6 +141,7 @@ export default function PromoPage() {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
++          count,
+           promo_type: type,
+           discount_percent: percent,
+           discount_amount: amount,
+@@ -158,6 +167,8 @@ export default function PromoPage() {
+       const data = await res.json();
+       if (!res.ok) throw new Error(data.error ?? "Gagal membuat desain.");
+       setResultId(data.id);
++      setResults(data.designs ?? []);
++      setNotice(`${data.designs?.length ?? 1} desain berhasil dibuat dan masuk riwayat. Tandai hasil terbaik sebagai pilihan.`);
+       await loadDesigns();
+     } catch (e) {
+       setError(e instanceof Error ? e.message : "Gagal membuat desain.");
+@@ -166,13 +177,60 @@ export default function PromoPage() {
+     }
+   }
+ 
++  async function openDesign(design: Design) {
++    setResultId(design.id); setError(""); setNotice("");
++    if (!design.batch_id) { setResults([design]); return; }
++    setBusy(true);
++    try {
++      const response = await fetch(`/api/promo?batch_id=${encodeURIComponent(design.batch_id)}`, { cache: "no-store" });
++      const data = await response.json();
++      if (!response.ok) throw new Error(data.error || "Gagal membuka kelompok desain.");
++      setResults(data.designs);
++    } catch (e) { setResults([design]); setError((e as Error).message); }
++    finally { setBusy(false); }
++  }
++
++  async function generateFromSaved(more: boolean) {
++    if (!resultId || busy) return;
++    setBusy(true); setError(""); setNotice("");
++    try {
++      const response = await fetch("/api/promo", {
++        method: "POST", headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(more ? { source_id: resultId, count: count === 1 ? 4 : count } : { regenerate_id: resultId }),
++      });
++      const data = await response.json();
++      if (!response.ok) throw new Error(data.error || "Gagal membuat variasi.");
++      if (more) setResults(data.designs);
++      else setResults(current => [...current, ...data.designs]);
++      setResultId(data.id);
++      setNotice(more ? "Kelompok variasi baru dibuat dari pengaturan desain terpilih." : "Desain baru dibuat. Hasil sebelumnya tetap tersedia.");
++      await loadDesigns();
++    } catch (e) { setError((e as Error).message); }
++    finally { setBusy(false); }
++  }
++
++  async function saveDesign(design: Design) {
++    setBusy(true); setError(""); setNotice("");
++    try {
++      const response = await fetch("/api/promo", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: design.id, is_saved: !design.is_saved }) });
++      const data = await response.json();
++      if (!response.ok) throw new Error(data.error || "Gagal menyimpan pilihan.");
++      setResults(current => current.map(d => d.id === design.id ? { ...d, is_saved: design.is_saved ? 0 : 1 } : d));
++      setNotice(design.is_saved ? "Tanda pilihan dilepas; desain tetap tersimpan di riwayat." : "Desain ditandai sebagai pilihan.");
++      await loadDesigns();
++    } catch (e) { setError((e as Error).message); }
++    finally { setBusy(false); }
++  }
++
+   async function removeDesign(id: number) {
+     if (!confirm("Hapus desain ini?")) return;
+     try {
+       const res = await fetch(`/api/promo?id=${id}`, { method: "DELETE" });
+       const data = await res.json();
+       if (!res.ok) throw new Error(data.error ?? "Gagal menghapus.");
+-      if (resultId === id) setResultId(null);
++      const remaining = results.filter(d => d.id !== id);
++      if (resultId === id) setResultId(remaining[0]?.id ?? null);
++      setResults(remaining);
+       await loadDesigns();
+     } catch (e) {
+       setError(e instanceof Error ? e.message : "Gagal menghapus.");
+@@ -184,12 +242,15 @@ export default function PromoPage() {
+     return vals.length > 0 && vals.every((v) => v) ? (vals as number[]).reduce((a, b) => a + b, 0) : null;
+   })();
+ 
++  const selectedDesign = results.find(d => d.id === resultId) ?? designs.find(d => d.id === resultId) ?? savedDesigns.find(d => d.id === resultId);
++  const history = savedOnly ? savedDesigns : designs;
++
+   return (
+     <div className="mx-auto max-w-6xl space-y-6">
+       <header>
+         <h1 className="text-2xl font-bold text-slate-900">Promo Composer</h1>
+         <p className="text-sm text-slate-500">
+-          Pilih jenis promo dan sampai {MAX_PROMO_ITEMS} produk. Pilih satu dari enam konsep komposisi. Foto asli dan informasi produk tetap digunakan.
++          Buat 4–6 alternatif komposisi, bandingkan hasil, lalu simpan desain pilihan. Nama, harga, dan foto produk tetap mengikuti data yang Anda berikan.
+         </p>
+       </header>
+ 
+@@ -199,6 +260,8 @@ export default function PromoPage() {
+         </div>
+       )}
+ 
++      {notice && <p role="status" className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">{notice}</p>}
++      <fieldset disabled={busy} className="min-w-0 border-0 p-0">
+       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+         <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+           <h2 className="mb-3 text-sm font-semibold text-slate-900">
+@@ -474,6 +537,13 @@ export default function PromoPage() {
+                 </div>
+               </div>
+             </div>
++            <label className="block text-sm font-medium text-slate-700">Jumlah desain
++              <select value={count} onChange={e => setCount(Number(e.target.value))} className={inputCls}>
++                <option value={1}>1 desain (konsep terpilih)</option>
++                <option value={4}>4 variasi</option><option value={5}>5 variasi</option><option value={6}>6 variasi</option>
++              </select>
++            </label>
++            <p className="text-xs text-slate-500">Konsep terpilih menjadi desain pertama; variasi lain memakai konsep berbeda. Proses dijalankan berurutan dan dapat memerlukan waktu lebih lama untuk beberapa produk.</p>
+             <div className="flex flex-wrap gap-2">
+               <button
+                 onClick={generate}
+@@ -481,29 +551,34 @@ export default function PromoPage() {
+                 className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-60"
+               >
+                 {busy ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+-                {busy ? "Menyusun desain..." : "Buat visual promo"}
++                {busy ? "Menyusun desain…" : count === 1 ? "Buat visual promo" : `Buat ${count} variasi desain`}
+               </button>
+-              {resultId != null && (
+-                <button
+-                  onClick={generate}
+-                  disabled={busy}
+-                  className="flex items-center gap-2 rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-200 disabled:opacity-60"
+-                >
+-                  <Shuffle size={16} /> Buat variasi lain
+-                </button>
+-              )}
++
+             </div>
+           </div>
+ 
+           {resultId != null && (
+             <div className="space-y-3 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+-              <h2 className="text-sm font-semibold text-slate-900">Hasil</h2>
++              <h2 className="text-sm font-semibold text-slate-900">Hasil terpilih #{resultId}</h2>
++              {results.length > 0 && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
++                {results.map(d => <button type="button" key={d.id} onClick={() => setResultId(d.id)} aria-pressed={resultId === d.id}
++                  className={`overflow-hidden rounded-xl border-2 text-left ${resultId === d.id ? "border-indigo-600" : "border-slate-200"}`}>
++                  <img src={`/api/promo-file?id=${d.id}`} alt={`Alternatif ${d.id}`} className="h-40 w-full bg-slate-50 object-contain" />
++                  <span className="block p-2 text-xs font-medium">{PROMO_STYLES.find(s => s.id === d.style)?.label ?? "Desain lama"}{d.is_saved ? " ★" : ""}</span>
++                </button>)}
++              </div>}
++              <p className="text-xs text-slate-500">Klik alternatif untuk membandingkan. Membuat ulang atau variasi tambahan menggunakan pengaturan tersimpan, termasuk pilihan foto olahan.</p>
+               <img
+                 src={`/api/promo-file?id=${resultId}`}
+                 alt="Hasil desain promo"
+                 className="mx-auto max-h-[40rem] w-auto rounded-xl ring-1 ring-slate-200"
+               />
+-              <div className="flex gap-2 text-sm font-medium">
++              <div className="flex flex-wrap gap-2 text-sm font-medium">
++                {selectedDesign && <button onClick={() => saveDesign(selectedDesign)} className="rounded-lg border border-indigo-200 px-4 py-2 text-indigo-700">{selectedDesign.is_saved ? "Lepas tanda pilihan" : "Simpan desain pilihan"}</button>}
++                {selectedDesign?.can_regenerate === 1 && <>
++                  <button onClick={() => generateFromSaved(false)} className="rounded-lg bg-slate-100 px-4 py-2 text-slate-700">Buat ulang desain terpilih</button>
++                  <button onClick={() => generateFromSaved(true)} className="flex items-center gap-2 rounded-lg bg-slate-100 px-4 py-2 text-slate-700"><Shuffle size={16} />Buat variasi tambahan</button>
++                </>}
+                 <a
+                   href={`/api/promo-file?id=${resultId}&download=1`}
+                   className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+@@ -522,14 +597,21 @@ export default function PromoPage() {
+         </section>
+       </div>
+ 
++      </fieldset>
++
+       {designs.length > 0 && (
+         <section>
+-          <h2 className="mb-3 text-lg font-semibold text-slate-900">Desain sebelumnya ({designs.length})</h2>
++          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
++            <h2 className="text-lg font-semibold text-slate-900">Riwayat desain ({history.length})</h2>
++            <label className="flex gap-2 text-sm"><input type="checkbox" checked={savedOnly} onChange={e => setSavedOnly(e.target.checked)} />Hanya desain pilihan</label>
++          </div>
++          {savedOnly && !history.length && <p className="mb-4 text-sm text-slate-500">Belum ada desain yang ditandai sebagai pilihan.</p>}
+           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-6">
+-            {designs.map((d) => (
++            {history.map((d) => (
+               <button
+                 key={d.id}
+-                onClick={() => setResultId(d.id)}
++                disabled={busy}
++                onClick={() => openDesign(d)}
+                 className="overflow-hidden rounded-xl bg-white text-left shadow-sm ring-1 ring-slate-200 hover:ring-indigo-400"
+               >
+                 <img
+diff --git a/docs/FASE-4-PENGOLAHAN-FOTO.md b/docs/FASE-4-PENGOLAHAN-FOTO.md
+index d8f7391..e910324 100644
+--- a/docs/FASE-4-PENGOLAHAN-FOTO.md
++++ b/docs/FASE-4-PENGOLAHAN-FOTO.md
+@@ -97,7 +97,7 @@ Smoke test aplikasi produksi lokal (setelah build, gunakan port 3064 yang belum
+ node tests/smoke-phase4.mjs
+ ```
+ 
+-Smoke test membuat dan menghapus record fixture sendiri, memeriksa upload, pengolahan, unduhan, validasi, integritas foto sumber, pemilihan varian di poster, persistence setelah restart, dan penghapusan. Record log aktivitas pengujian tetap tercatat. Uji browser opsional memerlukan Playwright dan Chromium yang sudah terpasang (`PHASE4_UI=1` pada Linux/macOS, atau variabel lingkungan PowerShell). Playwright bukan dependensi fungsi aplikasi.
++Smoke test membuat dan menghapus record fixture sendiri, memeriksa upload, pengolahan, unduhan, validasi, integritas foto sumber, pemilihan varian di poster, persistence setelah restart, dan penghapusan. Pada versi script sejak Fase 5, database dan file pengujian memakai direktori data sementara yang dihapus setelah selesai. Uji browser opsional memerlukan Playwright dan Chromium yang sudah terpasang (`PHASE4_UI=1` pada Linux/macOS, atau variabel lingkungan PowerShell). Playwright bukan dependensi fungsi aplikasi.
+ 
+ Hasil pengujian sesi implementasi dicatat pada `docs/VALIDASI-FASE-4.md`.
+ 
+diff --git a/docs/FASE-5-VARIASI-DESAIN.md b/docs/FASE-5-VARIASI-DESAIN.md
+new file mode 100644
+index 0000000..6bfdf22
+--- /dev/null
++++ b/docs/FASE-5-VARIASI-DESAIN.md
+@@ -0,0 +1,78 @@
++# Fase 5 — Multiple Design Variations
++
++Baseline Fase 4: `9d62a5e`. Dikerjakan 1 November 2026.
++
++## Fitur
++
++- Pilihan **1 desain**, **4 variasi**, **5 variasi**, atau **6 variasi** pada Promo Composer. Default UI: 4 variasi. API lama tanpa `count` tetap menghasilkan satu desain dan mengembalikan `id` seperti sebelumnya.
++- Setiap batch memakai konsep berbeda dari enam konsep Creative Layout Engine. Konsep pilihan pengguna menjadi desain pertama. Pemilihan konsep selanjutnya berputar, bukan sekadar mengganti warna.
++- Alternatif ditampilkan sebagai galeri; klik untuk melihat preview lebih besar dan mengunduh JPG.
++- **Simpan desain pilihan** menyimpan tanda favorit di SQLite. Semua hasil yang berhasil dibuat sudah masuk riwayat; melepas tanda pilihan tidak menghapus poster.
++- **Buat ulang desain terpilih** membuat satu poster baru dengan konsep berikutnya dan orientasi komposisi berbeda. Poster lama tetap tersedia.
++- **Buat variasi tambahan** membuat batch baru dari pengaturan desain terpilih, berisi 4–6 hasil. Jika pilihan jumlah pada formulir adalah 1, tombol ini membuat 4 variasi.
++- Pembuatan ulang memakai snapshot tersimpan: nama, harga, jenis promo, ukuran, teks, tema, ID foto dan ID foto olahan. Perubahan formulir saat ini tidak ikut diterapkan. Untuk memakai data baru, gunakan tombol utama pembuatan dari formulir.
++- Galeri riwayat menampilkan 100 poster terbaru; filter **Hanya desain pilihan** mengambil 100 poster pilihan terbaru secara terpisah, sehingga pilihan tidak hilang hanya karena keluar dari 100 poster umum terbaru. Semua record lain tetap berada di database, tetapi pagination belum disediakan.
++
++## Perbedaan visual
++
++Batch memilih 4–6 konsep komposisi berbeda. Ada susunan foto/informasi berdampingan, hero dengan produk pendukung, grid katalog, serta susunan bertingkat. Orientasi komposisi dapat dibalik dan judul digeser tanpa membalik piksel foto atau tulisan kemasan.
++
++Pilihan warna pengguna tetap dihormati; pengujian enam desain dengan tema merah yang sama menghasilkan enam JPEG berbeda. Ini adalah rendering layout lokal, bukan generasi gambar AI baru. Produknya tetap memakai foto asli/olahan yang dipilih, dan harga dihitung sekali untuk seluruh batch.
++
++Membuat ulang satu desain sengaja beralih konsep untuk memberi hasil komposisi berbeda. Belum ada kontrol untuk membuat ulang hanya satu elemen, mengedit layer, atau mempertahankan semua posisi sambil mengubah objek tertentu; itu fase editor berikutnya.
++
++## Penyimpanan dan kegagalan
++
++Tabel tambahan `promo_generation` menyimpan batch ID, snapshot input, konsep, seed, orientasi, tanda pilihan dan hubungan dengan desain sumber. Tabel `promo_designs` dan JPG lama tetap digunakan. Tidak ada perubahan destruktif pada schema lama; restart server diperlukan setelah pembaruan agar tabel tambahan diinisialisasi.
++
++Render dijalankan berurutan untuk membatasi penggunaan CPU/RAM. Satu request generate aktif per proses server; request generate kedua dan penghapusan poster menerima 409 sampai selesai. UI menampilkan proses berjalan dan menonaktifkan kontrol formulir. Belum ada antrean persisten atau persentase progres.
++
++Jika satu render gagal, file batch yang sudah selesai dibersihkan. Setelah semua render selesai, seluruh record dan log disimpan dalam satu transaksi SQLite. Jika transaksi gagal, file hasil dibersihkan. Tes unit menyimulasikan kegagalan renderer dan database untuk memeriksa mekanisme ini. Mematikan paksa server di tengah proses tetap dapat meninggalkan file tanpa record; pekerjaan aktif tidak otomatis dilanjutkan. Database, storage, dan snapshot yang sudah berhasil disimpan bertahan setelah restart.
++
++Poster lama sebelum Fase 5 masih dapat dibuka, diunduh, ditandai sebagai pilihan dan dihapus. Karena tidak memiliki snapshot lengkap, tombol buat ulang tidak ditampilkan; API menolak upaya tersebut dengan pesan untuk membuat desain baru dari formulir. Menghapus foto sumber/varian tidak menghapus JPG poster yang sudah jadi, tetapi pembuatan ulang akan menampilkan error jika sumber tersebut sudah tidak tersedia.
++
++## API
++
++- `POST /api/promo` dengan input lama dan `count: 4 | 5 | 6` membuat batch.
++- Respons 201: `{ id, batch_id, designs }`; `id` pertama tetap tersedia untuk kompatibilitas.
++- `POST /api/promo` dengan `{ regenerate_id }` membuat satu hasil baru dari snapshot.
++- `POST /api/promo` dengan `{ source_id, count: 4 | 5 | 6 }` membuat batch tambahan dari snapshot.
++- `PATCH /api/promo` dengan `{ id, is_saved: true | false }` mengatur tanda pilihan.
++- `GET /api/promo?batch_id=...` memuat satu kelompok desain.
++- `GET /api/promo?saved=1` memuat daftar pilihan terbaru.
++- Endpoint file dan penghapusan lama tetap digunakan. Regenerasi tidak mengganti JPG lama sehingga cache unduhan tidak menjadi usang.
++
++## Validasi sesi implementasi
++
++- TypeScript, ESLint, production build.
++- 12 tes Node: regresi nominal harga, validasi jumlah, keunikan konsep, urutan render, pembersihan file saat renderer gagal dan saat persistensi gagal.
++- 15 tes Python dengan model AI lokal aktif: regresi foto, mask CPU, geometri, dan 96 render JPG (6 konsep × 4 format × 2 mode × 2 orientasi). Pemeriksaan dimensi/nonkosong dan foto sumber tetap diterapkan.
++- Smoke test produksi `tests/smoke-phase5.mjs`: jumlah 4/5/6, JPEG berbeda pada tema sama, presisi harga, foto olahan, bundling, empat format, simpan pilihan, buat ulang dari snapshot, batch tambahan, dukungan poster lama, validasi, respons 409, persistence setelah restart, dan sumber yang telah dihapus.
++- Pemeriksaan visual contact sheet enam konsep memakai foto fixture sintetis; bukan kumpulan foto produk pengguna.
++- Uji regresi alur Fase 4 dijalankan lagi.
++
++Pengujian browser desktop/HP belum terverifikasi karena executable Chromium tidak tersedia dan unduhannya gagal pada sesi sebelumnya. Tidak ada klaim bahwa interaksi UI browser atau perangkat Windows/AMD pengguna telah diuji langsung. Render poster dan API diuji pada Linux.
++
++## Menjalankan pengujian
++
++```bash
++npx tsc --noEmit
++npm run lint
++npm run build
++node --test tests/*.test.mjs
++python -m unittest discover -s tests -p "test_*.py"
++node tests/smoke-phase4.mjs
++node tests/smoke-phase5.mjs
++```
++
++Gunakan `RUN_LOCAL_AI_TESTS=1` jika paket/model lokal tersedia agar tes model CPU tidak dilewati. Smoke test memerlukan port 3064 (fase 4) dan 3065 (fase 5) yang bebas. Smoke test memakai `AUTOFEEDS_DATA_DIR` ke folder sementara yang terisolasi, termasuk database, upload, dan log. Folder uji dihapus setelah pengujian; data aplikasi utama tidak dipakai. Jika model AI lokal tersedia, salinannya disertakan hanya di folder sementara untuk regresi AI.
++
++## Berikutnya
++
++Fase 6 adalah editor desain berbasis layer. Tombol editor belum ditambahkan pada fase ini agar tidak ada tombol yang menjanjikan fitur yang belum tersedia. Ekspor PNG poster tetap Fase 8; PNG foto olahan Fase 4 tetap berfungsi.
++
++## Direktori data opsional
++
++Tanpa pengaturan tambahan, data tetap memakai folder `database` dan `storage` di proyek. Variabel lingkungan server `AUTOFEEDS_DATA_DIR` dapat diarahkan ke direktori absolut lain untuk memisahkan data dari source; gunakan nilai yang sama saat memasang model dan menjalankan server. Smoke test memakainya agar database uji tidak berbagi dengan aplikasi utama. Lokasi data tidak berubah untuk pengguna yang tidak mengatur variabel ini.
++
++Catatan pengujian ulang: pembacaan SQLite oleh koneksi tes tambahan pada direktori kerja bersama sempat menghasilkan `SQLITE_IOERR_SHORT_READ`. Smoke test dipindahkan ke direktori sementara yang terisolasi melalui konfigurasi data opsional di atas; pengujian akhir batch, restart, dan regresi Fase 4 selesai tanpa error. Tidak dilakukan perubahan destruktif pada database pengguna untuk mengatasi kendala tersebut.
+diff --git a/lib/db.ts b/lib/db.ts
+index a39a0f3..9022ecf 100644
+--- a/lib/db.ts
++++ b/lib/db.ts
+@@ -3,7 +3,7 @@ import fs from "node:fs";
+ import path from "node:path";
+ import { SCHEMA_SQL, DEFAULT_SETTINGS, DEFAULT_CATEGORIES } from "./schema";
+ 
+-const DB_DIR = path.join(process.cwd(), "database");
++const DB_DIR = path.join(process.env.AUTOFEEDS_DATA_DIR || process.cwd(), "database");
+ export const DB_PATH = path.join(DB_DIR, "autofeeds.db");
+ 
+ // Satu koneksi saja, tetap aman saat Next.js memuat ulang kode di mode dev
+diff --git a/lib/promo-variations.ts b/lib/promo-variations.ts
+new file mode 100644
+index 0000000..b3a4247
+--- /dev/null
++++ b/lib/promo-variations.ts
+@@ -0,0 +1,38 @@
++import { PROMO_STYLES } from "./promo-options";
++
++export function variationCount(value: unknown): number {
++  const n = value === undefined ? 1 : value;
++  if (typeof n !== "number" || !Number.isInteger(n) || ![1, 4, 5, 6].includes(n)) throw new Error("Jumlah desain harus 1, 4, 5, atau 6.");
++  return n;
++}
++
++// Select distinct compositions. Preferred concept leads; subsequent concepts rotate.
++export function variationStyles(preferred: string, count: number, offset = 0): string[] {
++  variationCount(count);
++  const ids: string[] = PROMO_STYLES.map(s => s.id);
++  if (!ids.includes(preferred)) throw new Error("Konsep desain tidak valid.");
++  const remaining = ids.filter(id => id !== preferred);
++  const shift = ((offset % remaining.length) + remaining.length) % remaining.length;
++  return [preferred, ...remaining.slice(shift), ...remaining.slice(0, shift)].slice(0, count);
++}
++export function nextVariationStyle(style: string): string {
++  const index = PROMO_STYLES.findIndex(s => s.id === style);
++  return PROMO_STYLES[(index + 1) % PROMO_STYLES.length].id;
++}
++
++// Both renderer and database failures roll back completed outputs.
++export async function createPromoBatch<T>(
++  count: number,
++  render: (index: number) => Promise<string>,
++  persist: (files: string[]) => T,
++  remove: (filename: string) => void,
++): Promise<T> {
++  const files: string[] = [];
++  try {
++    for (let i = 0; i < count; i++) files.push(await render(i));
++    return persist(files);
++  } catch (error) {
++    for (const filename of files) { try { remove(filename); } catch { /* preserve original error */ } }
++    throw error;
++  }
++}
+diff --git a/lib/promo.ts b/lib/promo.ts
+index da60a26..d3eb896 100644
+--- a/lib/promo.ts
++++ b/lib/promo.ts
+@@ -26,6 +26,7 @@ export type PromoSpec = {
+   theme: string;
+   seed: number;
+   style?: string;
++  layout_variant?: number;
+   mode: "items" | "bundle";
+   title: string;
+   subtitle: string;
+diff --git a/lib/schema.ts b/lib/schema.ts
+index 0d335b3..241b69a 100644
+--- a/lib/schema.ts
++++ b/lib/schema.ts
+@@ -82,6 +82,17 @@ CREATE TABLE IF NOT EXISTS promo_designs (
+   output_filename TEXT NOT NULL UNIQUE,
+   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
++CREATE TABLE IF NOT EXISTS promo_generation (
++  design_id INTEGER PRIMARY KEY REFERENCES promo_designs(id) ON DELETE CASCADE,
++  batch_id TEXT NOT NULL,
++  request_json TEXT NOT NULL,
++  style TEXT NOT NULL,
++  seed INTEGER NOT NULL,
++  layout_variant INTEGER NOT NULL DEFAULT 0,
++  is_saved INTEGER NOT NULL DEFAULT 0,
++  parent_design_id INTEGER REFERENCES promo_designs(id) ON DELETE SET NULL
++);
++CREATE INDEX IF NOT EXISTS idx_promo_batch ON promo_generation(batch_id);
+ -- Fase 1: tabel untuk desain berbasis layer dan Brand Kit (dipakai fase 2-7)
+ CREATE TABLE IF NOT EXISTS designs (
+   id INTEGER PRIMARY KEY AUTOINCREMENT,
+diff --git a/lib/storage.ts b/lib/storage.ts
+index 0e9f1c0..5dce8fa 100644
+--- a/lib/storage.ts
++++ b/lib/storage.ts
+@@ -3,7 +3,7 @@ import fs from "node:fs";
+ import path from "node:path";
+ import { getSetting } from "./db";
+ 
+-export const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
++export const UPLOAD_DIR = path.join(process.env.AUTOFEEDS_DATA_DIR || process.cwd(), "storage", "uploads");
+ 
+ export type ImageType = { mime: string; ext: string };
+ 
+diff --git a/scripts/compose_promo.py b/scripts/compose_promo.py
+index 6498c17..a2a9cdc 100644
+--- a/scripts/compose_promo.py
++++ b/scripts/compose_promo.py
+@@ -271,6 +271,10 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+         tw, th = w - 2 * pad, h - (2 * pad + img_h) - pad // 2
+         centered, stack = True, True
+ 
++    if st.get("flip") and st.get("hero"):
++        box = (x + w - (box[0] - x) - box[2], box[1], box[2], box[3])
++        tx = x + w - (tx - x) - tw
++
+     try:
+         im = ImageOps.contain(load_product(item["path"]), (box[2], box[3]), Image.Resampling.LANCZOS)
+         canvas.alpha_composite(im, (box[0] + (box[2] - im.width) // 2, box[1] + (box[3] - im.height) // 2))
+@@ -351,6 +355,7 @@ def main():
+     }
+ 
+     st["style"] = style
++    st["flip"] = spec.get("layout_variant", 0) == 1
+     # Art direction is selected by concept, not randomized decoration.
+     directions = {
+         "premium": ((247, 245, 240), (235, 232, 225), "plain", "rect", .015),
+@@ -397,6 +402,8 @@ def main():
+     grid_top = header_h
+     grid_h = H - bottom_margin - grid_top - (panel_h + gap if bundle else 0)
+     rects = creative_plan(style, (margin, grid_top, W - 2 * margin, grid_h), n, landscape)
++    if st["flip"]:
++        rects = [(W - x - w, y, w, h) for x, y, w, h in rects]
+ 
+     sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+     sd = ImageDraw.Draw(sh)
+@@ -416,6 +423,8 @@ def main():
+         tb = d.textbbox((0, 0), title, font=tf)
+         tw, th = tb[2] - tb[0], tb[3] - tb[1]
+         tx = (W - tw) / 2 - tb[0]
++        if st["flip"] and st["head"] != "ribbon":
++            tx = margin - tb[0]
+         ty0 = int(header_h * 0.10)
+         ty = ty0 - tb[1]
+         pady = int(tf.size * 0.18)
+@@ -430,7 +439,7 @@ def main():
+             d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
+             d.text((tx, ty), title, font=tf, fill=header_color)
+             bar_y = ty0 + th + int(tf.size * 0.14)
+-            d.rounded_rectangle([(W - tw) / 2, bar_y, (W + tw) / 2, bar_y + 8], radius=4, fill=accent)
++            d.rounded_rectangle([tx + tb[0], bar_y, tx + tb[0] + tw, bar_y + 8], radius=4, fill=accent)
+             sub_y = ty0 + th + int(tf.size * 0.32)
+         else:
+             d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
+diff --git a/scripts/product_image.py b/scripts/product_image.py
+index fb0da0e..33e03d6 100644
+--- a/scripts/product_image.py
++++ b/scripts/product_image.py
+@@ -3,6 +3,7 @@ import hashlib
+ import importlib.util
+ import json
+ import math
++import os
+ from pathlib import Path
+ import re
+ import sys
+@@ -13,7 +14,7 @@ from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
+ # Bound decoded images and working output for machines with 16 GB RAM.
+ Image.MAX_IMAGE_PIXELS = 24_000_000
+ warnings.simplefilter('error', Image.DecompressionBombWarning)
+-MODEL_PATH = Path(__file__).resolve().parents[1] / 'storage' / 'models' / 'u2netp.onnx'
++MODEL_PATH = Path(os.environ.get('AUTOFEEDS_DATA_DIR') or Path(__file__).resolve().parents[1]) / 'storage' / 'models' / 'u2netp.onnx'
+ MODEL_MD5 = '8e83ca70e441ab06c318d82300c84806'
+ ENGINE = 'U2NETP / ONNX Runtime CPU'
+ 
+diff --git a/tests/promo-variations.test.mjs b/tests/promo-variations.test.mjs
+new file mode 100644
+index 0000000..04f3902
+--- /dev/null
++++ b/tests/promo-variations.test.mjs
+@@ -0,0 +1,38 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import ts from 'typescript';
++const compile = source => ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
++const data = source => `data:text/javascript;base64,${Buffer.from(compile(source)).toString('base64')}`;
++const options = data(fs.readFileSync(new URL('../lib/promo-options.ts', import.meta.url), 'utf8'));
++const source = fs.readFileSync(new URL('../lib/promo-variations.ts', import.meta.url), 'utf8').replace('"./promo-options"', JSON.stringify(options));
++const { variationCount, variationStyles, nextVariationStyle, createPromoBatch } = await import(data(source));
++test('only legacy single or batches of 4–6 are accepted', () => {
++  assert.equal(variationCount(undefined), 1);
++  for (const n of [1, 4, 5, 6]) assert.equal(variationCount(n), n);
++  for (const n of [0, 2, 3, 7, 4.5, NaN, '4', null, true]) assert.throws(() => variationCount(n));
++});
++test('every batch has distinct concepts and preserves the preferred first concept', () => {
++  for (const first of ['premium', 'flash', 'frozen', 'editorial', 'retail', 'spotlight']) {
++    for (const count of [1, 4, 5, 6]) {
++      const styles = variationStyles(first, count, 3);
++      assert.equal(styles[0], first); assert.equal(new Set(styles).size, count);
++    }
++    assert.notEqual(nextVariationStyle(first), first);
++  }
++});
++test('renderer failure removes completed outputs and never persists a partial batch', async () => {
++  const removed = []; let persisted = false;
++  await assert.rejects(createPromoBatch(4, async i => { if (i === 2) throw Error('Pillow failed'); return `file-${i}`; }, () => { persisted = true; }, file => removed.push(file)), /Pillow failed/);
++  assert.deepEqual(removed, ['file-0', 'file-1']); assert.equal(persisted, false);
++});
++test('database failure removes every completed output', async () => {
++  const removed = [];
++  await assert.rejects(createPromoBatch(4, async i => `file-${i}`, () => { throw Error('SQLite failed'); }, file => removed.push(file)), /SQLite failed/);
++  assert.deepEqual(removed, ['file-0', 'file-1', 'file-2', 'file-3']);
++});
++test('successful generation is sequential and keeps its output', async () => {
++  let active = false; const ordered = [];
++  const result = await createPromoBatch(6, async i => { assert.equal(active, false); active = true; await Promise.resolve(); ordered.push(i); active = false; return `file-${i}`; }, files => files, () => { throw Error('unexpected cleanup'); });
++  assert.deepEqual(ordered, [0, 1, 2, 3, 4, 5]); assert.equal(result.length, 6);
++});
+diff --git a/tests/smoke-phase4.mjs b/tests/smoke-phase4.mjs
+index 4f9000c..884420c 100644
+--- a/tests/smoke-phase4.mjs
++++ b/tests/smoke-phase4.mjs
+@@ -11,12 +11,15 @@ const require = createRequire(import.meta.url);
+ const port = Number(process.env.PHASE4_TEST_PORT || 3064);
+ const base = `http://127.0.0.1:${port}`;
+ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'autofeeds-phase4-'));
++const dataDir = path.join(temp, 'data');
++const modelSource = path.join(process.cwd(), 'storage', 'models', 'u2netp.onnx');
++if (fs.existsSync(modelSource)) { fs.mkdirSync(path.join(dataDir, 'storage', 'models'), { recursive: true }); fs.copyFileSync(modelSource, path.join(dataDir, 'storage', 'models', 'u2netp.onnx')); }
+ const log = fs.openSync(path.join(temp, 'server.log'), 'w');
+ let server;
+ let browser;
+ const imageIds = [], designIds = [];
+ async function start() {
+-  server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', String(port)], { stdio: ['ignore', log, log] });
++  server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', String(port)], { stdio: ['ignore', log, log], env: { ...process.env, AUTOFEEDS_DATA_DIR: dataDir } });
+   for (let i = 0; i < 80; i++) {
+     if (server.exitCode !== null) throw new Error(fs.readFileSync(path.join(temp, 'server.log'), 'utf8'));
+     try { const r = await fetch(base + '/api/images'); if (r.ok) return; } catch { /* starting */ }
+diff --git a/tests/smoke-phase5.mjs b/tests/smoke-phase5.mjs
+new file mode 100644
+index 0000000..64c2b15
+--- /dev/null
++++ b/tests/smoke-phase5.mjs
+@@ -0,0 +1,111 @@
++// Production integration test. Only fixtures created by this run are removed.
++import assert from 'node:assert/strict';
++import { spawn, spawnSync } from 'node:child_process';
++import { createHash, randomUUID } from 'node:crypto';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { once } from 'node:events';
++import Database from 'better-sqlite3';
++const port = Number(process.env.PHASE5_TEST_PORT || 3065), base = `http://127.0.0.1:${port}`;
++const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'autofeeds-phase5-'));
++const dataDir = path.join(temp, 'data');
++const modelSource = path.join(process.cwd(), 'storage', 'models', 'u2netp.onnx');
++if (fs.existsSync(modelSource)) { fs.mkdirSync(path.join(dataDir, 'storage', 'models'), { recursive: true }); fs.copyFileSync(modelSource, path.join(dataDir, 'storage', 'models', 'u2netp.onnx')); }
++const log = fs.openSync(path.join(temp, 'server.log'), 'w');
++const images = [], designs = new Set();
++let server, db;
++const hash = buffer => createHash('sha256').update(buffer).digest('hex');
++async function start() {
++  server = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start', '-H', '127.0.0.1', '-p', String(port)], { stdio: ['ignore', log, log], env: { ...process.env, AUTOFEEDS_DATA_DIR: dataDir } });
++  for (let i = 0; i < 80; i++) {
++    if (server.exitCode !== null) throw Error(fs.readFileSync(path.join(temp, 'server.log'), 'utf8'));
++    try { if ((await fetch(base + '/api/promo')).ok) return; } catch { /* starting */ }
++    await new Promise(resolve => setTimeout(resolve, 200));
++  }
++  throw Error('Server did not start');
++}
++async function stop() { if (server && server.exitCode === null) { const end = once(server, 'exit'); server.kill(); await end; } }
++async function call(route, body, expected = 200, method = 'POST') {
++  const r = await fetch(base + route, body === undefined ? undefined : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
++  assert.equal(r.status, expected, `${route}: ${await r.clone().text()}`);
++  return r.json();
++}
++async function generate(body) { const data = await call('/api/promo', body, 201); data.designs.forEach(d => designs.add(d.id)); return data; }
++function snapshot(id) { return JSON.parse(db.prepare('SELECT items_json FROM promo_designs WHERE id=?').get(id).items_json); }
++try {
++  const fixture = path.join(temp, 'product.png');
++  const setup = spawnSync('python', ['-c', `from PIL import Image,ImageDraw
++import sys
++im=Image.new('RGBA',(400,500),(0,0,0,0));d=ImageDraw.Draw(im);d.rectangle((100,70,300,420),fill='#d62638');d.rectangle((105,200,295,270),fill='yellow');im.save(sys.argv[1])`, fixture]);
++  assert.equal(setup.status, 0, setup.stderr.toString());
++  await start();
++  const form = new FormData(); form.append('file', new Blob([fs.readFileSync(fixture)], { type: 'image/png' }), 'phase5.png');
++  const upload = await fetch(base + '/api/images', { method: 'POST', body: form }); assert.equal(upload.status, 201);
++  const { id: imageId } = await upload.json(); images.push(imageId);
++  const { variant } = await call('/api/image-processing', { image_id: imageId, options: { background: 'transparent', shadow: true } }, 201);
++  const originalHash = hash(Buffer.from(await (await fetch(base + `/api/image-file?id=${imageId}`)).arrayBuffer()));
++  const body = { count: 6, format: 'feed', theme: 'merah', style: 'retail', promo_type: 'harga_spesial', title: 'PROMO UJI FASE 5',
++    items: [{ image_id: imageId, variant_id: variant.id, name: 'Nugget Ayam Original 500 gram', price: '24799', old_price: '30999' }] };
++  db = new Database(path.join(dataDir, 'database', 'autofeeds.db'));
++  db.pragma('foreign_keys=ON');
++  const batch = await generate(body);
++  assert.equal(batch.designs.length, 6); assert.equal(new Set(batch.designs.map(d => d.style)).size, 6);
++  assert.equal((await call(`/api/promo?batch_id=${batch.batch_id}`)).designs.length, 6);
++  const files = [];
++  for (const d of batch.designs) {
++    const r = await fetch(base + `/api/promo-file?id=${d.id}&download=1`); assert.equal(r.status, 200);
++    files.push(hash(Buffer.from(await r.arrayBuffer())));
++    assert.equal(snapshot(d.id).items[0].price, 'Rp24.799');
++    assert.equal(snapshot(d.id).items[0].variant_id, variant.id);
++  }
++  assert.equal(new Set(files).size, 6, 'fixed-color batch must produce six distinct rendered images');
++  const picked = batch.designs[0];
++  await call('/api/promo', { id: picked.id, is_saved: true }, 200, 'PATCH');
++  assert.ok((await call('/api/promo?saved=1')).designs.some(d => d.id === picked.id));
++  const regenerated = await generate({ regenerate_id: picked.id, title: 'SHOULD NOT APPLY', items: [{ price: 1 }] });
++  assert.equal(regenerated.designs.length, 1); assert.notEqual(regenerated.designs[0].style, picked.style);
++  assert.deepEqual(snapshot(regenerated.id).items, snapshot(picked.id).items);
++  assert.equal(regenerated.designs[0].title, body.title);
++  const more = await generate({ source_id: picked.id, count: 4 });
++  assert.equal(more.designs.length, 4); assert.notEqual(more.batch_id, batch.batch_id);
++  assert.deepEqual(snapshot(more.id).items, snapshot(picked.id).items);
++  await generate({ ...body, count: 5, format: 'square', promo_type: 'diskon_persen', discount_percent: 20, items: [{ ...body.items[0], price: '30999', old_price: '' }] });
++  const bundle = await generate({ ...body, count: 4, format: 'landscape', promo_type: 'bundling', bundle_price: '40000', items: [body.items[0], body.items[0]] });
++  assert.equal(snapshot(bundle.id).bundle.price_text, 'Rp40.000');
++  const single = await generate({ ...body, count: undefined, format: 'story' }); assert.equal(single.designs.length, 1);
++  for (const count of [0, 2, 3, 7, '4', 4.5]) await call('/api/promo', { ...body, count }, 400);
++  await call('/api/promo', { regenerate_id: picked.id, source_id: picked.id }, 400);
++  await call('/api/promo', { source_id: picked.id, count: 1 }, 400);
++  await call('/api/promo', { id: picked.id, is_saved: 'true' }, 400, 'PATCH');
++  const sourceFile = db.prepare('SELECT output_filename FROM promo_designs WHERE id=?').get(picked.id).output_filename;
++  const legacyName = randomUUID() + '.jpg';
++  fs.copyFileSync(path.join(dataDir, 'storage', 'uploads', 'promo', sourceFile), path.join(dataDir, 'storage', 'uploads', 'promo', legacyName));
++  const legacy = Number(db.prepare(`INSERT INTO promo_designs(title,layout_format,theme,items_json,output_filename) VALUES('LEGACY TEST','feed','merah','{}',?)`).run(legacyName).lastInsertRowid);
++  designs.add(legacy);
++  await call('/api/promo', { regenerate_id: legacy }, 409);
++  await call('/api/promo', { id: legacy, is_saved: true }, 200, 'PATCH');
++  assert.equal((await call('/api/promo?saved=1')).designs.find(d => d.id === legacy).can_regenerate, 0);
++  const concurrent = generate({ ...body, count: 6 });
++  for (let i = 0; i < 100; i++) {
++    if ((await call('/api/promo')).generating) break;
++    await new Promise(resolve => setTimeout(resolve, 10));
++  }
++  await call('/api/promo', body, 409);
++  await call(`/api/promo?id=${picked.id}`, {}, 409, 'DELETE');
++  await concurrent;
++  await stop(); await start();
++  assert.ok((await call('/api/promo?saved=1')).designs.some(d => d.id === picked.id));
++  assert.equal((await call(`/api/promo?batch_id=${batch.batch_id}`)).designs.length, 6);
++  await call(`/api/image-processing?id=${variant.id}`, {}, 200, 'DELETE');
++  await call('/api/promo', { regenerate_id: picked.id }, 404);
++  assert.equal((await fetch(base + `/api/promo-file?id=${picked.id}`)).status, 200);
++  assert.equal(hash(Buffer.from(await (await fetch(base + `/api/image-file?id=${imageId}`)).arrayBuffer())), originalHash);
++  console.log('PASS: batches 4/5/6, fixed-theme distinct JPEGs, original/derived photo integrity, exact prices, bundles, four formats, saved filter, immutable regeneration, more variations, legacy compatibility, validation, 409 lock, restart persistence, missing-source error.');
++} finally {
++  if (server?.exitCode === null) {
++    for (const id of designs) await fetch(base + `/api/promo?id=${id}`, { method: 'DELETE' }).catch(() => {});
++    for (const id of images) await fetch(base + `/api/images?id=${id}`, { method: 'DELETE' }).catch(() => {});
++  }
++  db?.close(); await stop(); fs.closeSync(log); fs.rmSync(temp, { recursive: true, force: true });
++}
+diff --git a/tests/test_creative_layout.py b/tests/test_creative_layout.py
+index 47347ed..2d940d9 100644
+--- a/tests/test_creative_layout.py
++++ b/tests/test_creative_layout.py
+@@ -45,9 +45,9 @@ class CreativeLayoutTests(unittest.TestCase):
+             original = source.read_bytes()
+             item = dict(path=str(source), name='Nugget Ayam Original 500 gram',
+                         price_text='Rp24.799', old_text='Rp30.999', tag='-20%')
+-            for style, (fmt, dims), mode in itertools.product(STYLES, FORMATS.items(), ('items', 'bundle')):
+-                with self.subTest(style=style, format=fmt, mode=mode):
+-                    spec = dict(format=fmt, style=style, theme='merah', seed=42,
++            for style, (fmt, dims), mode, flip in itertools.product(STYLES, FORMATS.items(), ('items', 'bundle'), (0, 1)):
++                with self.subTest(style=style, format=fmt, mode=mode, flip=flip):
++                    spec = dict(format=fmt, style=style, theme='merah', seed=42, layout_variant=flip,
+                                 mode=mode, title='PROMO AKHIR PEKAN', subtitle='Berlaku 1–7 November',
+                                 footer='ANTOFROZEN • Pesan via WhatsApp', badge='PROMO',
+                                 items=[item] if mode == 'items' else [dict(item, price_text='', old_text='', tag='')]*6,

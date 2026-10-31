@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getSetting } from "./db";
 
-export const UPLOAD_DIR = path.join(process.cwd(), "storage", "uploads");
+export const UPLOAD_DIR = path.join(process.env.AUTOFEEDS_DATA_DIR || process.cwd(), "storage", "uploads");
 
 export type ImageType = { mime: string; ext: string };
 

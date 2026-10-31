@@ -1,64 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AUTOfEEDS
 
-## Getting Started
+Studio konten promosi lokal: unggah foto produk, analisis melalui Ollama, buat caption dan poster, serta siapkan foto produk tanpa menimpa sumber asli.
 
-First, run the development server:
+Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), batch variasi desain (Fase 5), Design Editor berbasis layer (Fase 6), Brand Kit dan Content Studio (Fase 7), serta ekspor/ukuran khusus dan validasi akhir (Fase 8).
+
+Panduan langkah demi langkah: [docs/PANDUAN-PENGGUNAAN.md](docs/PANDUAN-PENGGUNAAN.md). Panduan visual HTML disertakan dalam paket unduhan.
+
+## Menjalankan di Windows 11
+
+Pasang Node.js **22 atau lebih baru** (dibutuhkan better-sqlite3 yang digunakan proyek), serta Python 3.10+. Lingkungan pengujian memakai Node 24 dan Python 3.12.
+
+Pastikan `node --version`, `npm --version`, dan `python --version` berhasil di terminal. Dari folder proyek:
 
 ```bash
+npm ci
+python -m pip install -r requirements.txt
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Alternatif Windows: jalankan `1-INSTAL-WINDOWS.bat`, lalu `2-MULAI-WINDOWS.bat`. File BAT belum diuji langsung pada Windows.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Buka `http://localhost:3000`. Saat memperbarui proyek yang sudah ada, hentikan server dan backup folder `database` dan `storage` terlebih dahulu, lalu jalankan ulang server setelah memasang pembaruan.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Fitur yang tersedia
 
-## Learn More
+- Upload JPG/PNG/WEBP dan penyimpanan lokal.
+- Analyzer dan Content Studio berbasis Ollama; model dipilih melalui Settings dan harus sudah terpasang.
+- Promo Composer: 1–6 produk atau bundling, harga tervalidasi, enam konsep komposisi, empat ukuran preset + custom 512–4096 px dan unduhan JPG/PNG.
+- Product Image Studio: pencahayaan, kontras, ketajaman, isolasi produk opsional, background transparan/warna, ukuran/posisi, bayangan, riwayat varian dan unduhan PNG foto.
+- Brand Kit: logo, palette, font, footer, default promosi dan template mandiri; snapshot menjaga hasil lama.
+- Content Studio: fakta manual/analisis, Indonesia/English, CTA/edukasi/copywriting, dan gaya brand melalui Ollama.
+- Design Editor: teks/harga/foto/bentuk sebagai layer terpisah, drag/resize/rotasi, undo/redo, penyimpanan dan unduhan JPG/PNG/SVG, transparansi PNG dan pilihan kualitas JPG.
+- Batch 4–6 poster dengan konsep berbeda, galeri perbandingan, desain pilihan, dan pembuatan ulang dari pengaturan tersimpan.
+- Pemilihan foto asli atau varian olahan untuk setiap produk di Promo Composer.
+- Content Library, History dan Settings.
 
-To learn more about Next.js, take a look at the following resources:
+Pengolahan cahaya dan pembuatan poster tidak memerlukan Ollama. Untuk foto biasa yang belum transparan, penggantian background memerlukan model isolasi AI; PNG transparan dapat dikomposisikan langsung.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Pemasangan AI background removal (opsional)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Dari folder proyek, gunakan Python yang sama dengan server:
 
-## Deploy on Vercel
+```bash
+python -m pip install -r requirements-ai.txt
+python scripts/setup_background_model.py
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Pemasangan mengunduh model kecil u2netp dari rilis resmi dan memverifikasi checksum. Muat ulang Product Image Studio setelah selesai. Pemrosesan memakai CPU dan tidak mengunggah foto ke layanan eksternal. Jika model belum terpasang, pengaturan foto dasar tetap tersedia; penghapusan background AI ditampilkan belum siap.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Foto asli tidak ditimpa. Hasil olahan, poster, database, caption dan riwayat disimpan lokal. Backup **database dan seluruh storage** ketika server berhenti; folder tersebut tidak termasuk Git maupun paket source.
 
-## AUTOfEEDS — Creative Layout Engine (Fase 3)
-
-Audit dan batas implementasi: [docs/AUDIT-FASE-3.md](docs/AUDIT-FASE-3.md).
-
-### Menjalankan di Windows 11
-
-1. Pasang Node.js yang memenuhi dependensi proyek dan Python 3.10+.
-2. Pastikan `node --version`, `npm --version`, dan `python --version` berhasil di terminal.
-3. Dari folder proyek: `npm ci` lalu `python -m pip install -r requirements.txt`.
-4. Jalankan `npm run dev`, buka `http://localhost:3000`.
-5. Upload foto, buka Promo Composer, isi harga, pilih konsep, lalu buat visual promo.
-
-Renderer poster berjalan lokal tanpa Ollama. Analisis gambar dan pembuatan caption memerlukan Ollama serta model yang dipilih di Settings. Jangan menganggap model telah terpasang hanya karena namanya tercantum di pengaturan.
-
-Foto asli, hasil poster dan database tersimpan lokal. Backup folder `database` dan `storage` saat aplikasi berhenti sebelum memindahkan komputer atau memperbarui aplikasi.
-
-### Pemeriksaan
+## Pengujian
 
 ```bash
 npx tsc --noEmit
 npm run lint
 npm run build
-node --test tests/promo-options.test.mjs
+node --test tests/*.test.mjs
 python -m unittest discover -s tests -p "test_*.py"
+node tests/smoke-phase4.mjs
+node tests/smoke-phase5.mjs
+node tests/smoke-phase6.mjs
+node tests/smoke-phase7.mjs
+node tests/smoke-phase8.mjs
 ```
 
-Fase ini menghasilkan satu JPG per proses. Editor layer, batch variasi, pengolahan background dan ekspor PNG masih dikerjakan pada fase berikutnya.
+Smoke test memerlukan build yang telah selesai, port 3064–3068 yang bebas, dan Python/Pillow. Smoke test memakai direktori data sementara dan membersihkannya setelah selesai. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
+
+## Dokumentasi dan batas fase
+
+- [Audit dan perubahan Fase 3](docs/AUDIT-FASE-3.md).
+- [Panduan Fase 4](docs/FASE-4-PENGOLAHAN-FOTO.md).
+- [Hasil validasi dan batas pengujian Fase 4](docs/VALIDASI-FASE-4.md).
+- [Fase 5: variasi desain dan hasil validasi](docs/FASE-5-VARIASI-DESAIN.md).
+- [Fase 6: Design Editor dan hasil validasi](docs/FASE-6-DESIGN-EDITOR.md).
+- [Fase 7: Brand Kit dan Content Studio](docs/FASE-7-BRAND-KIT-CONTENT-STUDIO.md).
+- [Fase 8: ekspor dan validasi akhir](docs/FASE-8-EKSPOR-DAN-VALIDASI.md).
+
+Fase 8 telah tersedia. Untuk editor, pilih hasil Promo Composer lalu klik **Edit desain (salinan)**. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.

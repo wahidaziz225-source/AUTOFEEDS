@@ -1,0 +1,1609 @@
+diff --git a/README.md b/README.md
+index 5d13a5d..d9f02b9 100644
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ Studio konten promosi lokal: unggah foto produk, analisis melalui Ollama, buat caption dan poster, serta siapkan foto produk tanpa menimpa sumber asli.
+ 
+-Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), batch variasi desain (Fase 5), serta Design Editor berbasis layer (Fase 6).
++Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), batch variasi desain (Fase 5), Design Editor berbasis layer (Fase 6), serta Brand Kit dan Content Studio (Fase 7).
+ 
+ ## Menjalankan di Windows 11
+ 
+@@ -24,6 +24,8 @@ Buka `http://localhost:3000`. Saat memperbarui proyek yang sudah ada, hentikan s
+ - Analyzer dan Content Studio berbasis Ollama; model dipilih melalui Settings dan harus sudah terpasang.
+ - Promo Composer: 1–6 produk atau bundling, harga tervalidasi, enam konsep komposisi, empat ukuran poster dan unduhan JPG.
+ - Product Image Studio: pencahayaan, kontras, ketajaman, isolasi produk opsional, background transparan/warna, ukuran/posisi, bayangan, riwayat varian dan unduhan PNG foto.
++- Brand Kit: logo, palette, font, footer, default promosi dan template mandiri; snapshot menjaga hasil lama.
++- Content Studio: fakta manual/analisis, Indonesia/English, CTA/edukasi/copywriting, dan gaya brand melalui Ollama.
+ - Design Editor: teks/harga/foto/bentuk sebagai layer terpisah, drag/resize/rotasi, undo/redo, penyimpanan dan unduhan JPG/SVG.
+ - Batch 4–6 poster dengan konsep berbeda, galeri perbandingan, desain pilihan, dan pembuatan ulang dari pengaturan tersimpan.
+ - Pemilihan foto asli atau varian olahan untuk setiap produk di Promo Composer.
+@@ -55,9 +57,10 @@ python -m unittest discover -s tests -p "test_*.py"
+ node tests/smoke-phase4.mjs
+ node tests/smoke-phase5.mjs
+ node tests/smoke-phase6.mjs
++node tests/smoke-phase7.mjs
+ ```
+ 
+-Smoke test memerlukan build yang telah selesai, port 3064, 3065 dan 3066 yang bebas, dan Python/Pillow. Smoke test memakai direktori data sementara dan membersihkannya setelah selesai. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
++Smoke test memerlukan build yang telah selesai, port 3064–3067 yang bebas, dan Python/Pillow. Smoke test memakai direktori data sementara dan membersihkannya setelah selesai. Tes AI nyata membutuhkan paket/model lokal dan `RUN_LOCAL_AI_TESTS=1`; contoh PowerShell ada di panduan fase 4.
+ 
+ ## Dokumentasi dan batas fase
+ 
+@@ -66,5 +69,6 @@ Smoke test memerlukan build yang telah selesai, port 3064, 3065 dan 3066 yang be
+ - [Hasil validasi dan batas pengujian Fase 4](docs/VALIDASI-FASE-4.md).
+ - [Fase 5: variasi desain dan hasil validasi](docs/FASE-5-VARIASI-DESAIN.md).
+ - [Fase 6: Design Editor dan hasil validasi](docs/FASE-6-DESIGN-EDITOR.md).
++- [Fase 7: Brand Kit dan Content Studio](docs/FASE-7-BRAND-KIT-CONTENT-STUDIO.md).
+ 
+-Brand Kit aktif dan ekspor PNG poster tetap fase berikutnya. Untuk editor, pilih hasil Promo Composer lalu klik **Edit desain (salinan)**. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.
++Ekspor PNG poster, custom size dan pemeriksaan akhir tetap Fase 8. Untuk editor, pilih hasil Promo Composer lalu klik **Edit desain (salinan)**. PNG Fase 4 adalah foto hasil olahan. Mask AI perlu diperiksa pada preview untuk memastikan tepi kemasan dan teks tidak ikut terpotong.
+diff --git a/app/api/brand-kits/route.ts b/app/api/brand-kits/route.ts
+new file mode 100644
+index 0000000..76def1b
+--- /dev/null
++++ b/app/api/brand-kits/route.ts
+@@ -0,0 +1,38 @@
++import fs from "node:fs";
++import {NextResponse} from "next/server";
++import {getDb,logActivity} from "@/lib/db";
++import {validateBrand} from "@/lib/brand-options";
++import {brandAssetPath,copyBrandLogo,listBrands} from "@/lib/brands";
++const bad=(error:string,status=400)=>NextResponse.json({error},{status});
++export async function GET(req:Request){const id=new URL(req.url).searchParams.get("id"),kits=listBrands();return NextResponse.json({kits:id?kits.filter(k=>k.id===Number(id)):kits});}
++async function write(req:Request,updating:boolean){
++ let logo:{id:string;width:number;height:number}|undefined,persisted=false;
++ try{
++  const raw=await req.text();if(raw.length>12000)return bad("Pengaturan terlalu besar.",413);
++  const body=JSON.parse(raw),fields=validateBrand(body),db=getDb(),id=Number(body.id);
++  const existing=updating?listBrands().find(k=>k.id===id):undefined;
++  if(updating&&!existing)return bad("Brand Kit tidak ditemukan.",404);
++  if(updating&&body.revision!==existing!.revision)return bad("Brand Kit telah berubah. Muat ulang sebelum menyimpan.",409);
++  if(body.logo_image_id!=null){const imageId=Number(body.logo_image_id);if(!Number.isSafeInteger(imageId)||imageId<=0)return bad("ID logo tidak valid.");logo=await copyBrandLogo(imageId);}
++  if(body.remove_logo!==undefined&&typeof body.remove_logo!=="boolean")return bad("Pilihan logo tidak valid.");
++  const logoFilename=logo?`${logo.id}.png`:body.remove_logo?null:existing?.logo_asset_id?`${existing.logo_asset_id}.png`:null;
++  const savedId=db.transaction(()=>{
++   if(updating){const current=db.prepare("SELECT revision FROM brand_profiles WHERE brand_id=?").get(id) as {revision:number}|undefined;if((current?.revision??1)!==body.revision)throw new Error("Brand Kit telah berubah. Muat ulang.");}
++   if(fields.is_default){db.prepare("UPDATE brand_profiles SET revision=revision+1 WHERE brand_id IN(SELECT id FROM brand_kits WHERE is_default=1 AND id!=?)").run(updating?id:0);db.prepare("UPDATE brand_kits SET is_default=0").run();}
++   let savedId=id;
++   if(updating)db.prepare(`UPDATE brand_kits SET name=?,logo_filename=?,primary_color=?,secondary_color=?,accent_color=?,font_family=?,footer_text=?,is_default=?,updated_at=datetime('now') WHERE id=?`).run(fields.name,logoFilename,fields.primary_color,fields.secondary_color,fields.accent_color,fields.font_family,fields.footer_text,fields.is_default?1:0,id);
++   else savedId=Number(db.prepare(`INSERT INTO brand_kits(name,logo_filename,primary_color,secondary_color,accent_color,font_family,footer_text,is_default) VALUES(?,?,?,?,?,?,?,?)`).run(fields.name,logoFilename,fields.primary_color,fields.secondary_color,fields.accent_color,fields.font_family,fields.footer_text,fields.is_default?1:0).lastInsertRowid);
++   db.prepare(`INSERT INTO brand_profiles(brand_id,revision,options_json) VALUES(?,?,?) ON CONFLICT(brand_id) DO UPDATE SET revision=excluded.revision,options_json=excluded.options_json`).run(savedId,updating?existing!.revision+1:1,JSON.stringify(fields));
++   if(logo)db.prepare("INSERT INTO brand_assets(id,width,height) VALUES(?,?,?)").run(logo.id,logo.width,logo.height);
++   logActivity(updating?"Perbarui Brand Kit":"Buat Brand Kit","brand",savedId,fields.name);return savedId;
++  })();persisted=true;return NextResponse.json({kit:listBrands().find(k=>k.id===savedId)},{status:updating?200:201});
++ }catch(e){return bad(e instanceof Error?e.message:"Gagal menyimpan Brand Kit.");}
++ finally{if(logo&&!persisted)fs.rmSync(brandAssetPath(logo.id)!,{force:true});}
++}
++export async function POST(req:Request){return write(req,false);}
++export async function PATCH(req:Request){return write(req,true);}
++export async function DELETE(req:Request){
++ const id=Number(new URL(req.url).searchParams.get('id'));if(!Number.isSafeInteger(id)||id<=0)return bad("ID tidak valid.");
++ const db=getDb();const result=db.prepare("DELETE FROM brand_kits WHERE id=?").run(id);if(!result.changes)return bad("Brand Kit tidak ditemukan.",404);
++ logActivity("Hapus Brand Kit","brand",id,null);return NextResponse.json({ok:true});
++}
+diff --git a/app/api/brand-logo/route.ts b/app/api/brand-logo/route.ts
+new file mode 100644
+index 0000000..d443eca
+--- /dev/null
++++ b/app/api/brand-logo/route.ts
+@@ -0,0 +1,8 @@
++import fs from "node:fs";
++import {getDb} from "@/lib/db";
++import {brandAssetPath} from "@/lib/brands";
++export async function GET(req:Request){
++ const id=new URL(req.url).searchParams.get('id')??'',file=brandAssetPath(id);
++ if(!file||!getDb().prepare("SELECT id FROM brand_assets WHERE id=?").get(id)||!fs.existsSync(file))return new Response('Logo tidak ditemukan',{status:404});
++ return new Response(new Uint8Array(fs.readFileSync(file)),{headers:{'Content-Type':'image/png','Cache-Control':'private, max-age=31536000, immutable','X-Content-Type-Options':'nosniff'}});
++}
+diff --git a/app/api/brand-templates/route.ts b/app/api/brand-templates/route.ts
+new file mode 100644
+index 0000000..e73091f
+--- /dev/null
++++ b/app/api/brand-templates/route.ts
+@@ -0,0 +1,33 @@
++import fs from "node:fs";
++import {NextResponse} from "next/server";
++import {getDb,logActivity} from "@/lib/db";
++import {cloneDocument,designAssetPath} from "@/lib/design-storage";
++const bad=(error:string,status=400)=>NextResponse.json({error},{status});
++export async function GET(req:Request){const brand=new URL(req.url).searchParams.get("brand_id");const templates=getDb().prepare("SELECT t.*,b.name AS brand_name FROM brand_templates t LEFT JOIN brand_kits b ON b.id=t.brand_id ORDER BY t.design_id DESC LIMIT 100").all() as {brand_id:number|null}[];return NextResponse.json({templates:brand?templates.filter(t=>t.brand_id===Number(brand)):templates});}
++export async function POST(req:Request){
++ let assets:{id:string;width:number;height:number}[]=[],persisted=false;
++ try{
++  const body=await req.json(),db=getDb(),using=body?.use_id!==undefined;
++  const source=Number(using?body.use_id:body?.design_id);if(!Number.isSafeInteger(source)||source<=0)return bad("ID dokumen tidak valid.");
++  if(using&&!db.prepare("SELECT design_id FROM brand_templates WHERE design_id=?").get(source))return bad("Template tidak ditemukan.",404);
++  const brand=body.brand_id==null?null:Number(body.brand_id);if(!using&&(!Number.isSafeInteger(brand)||!db.prepare("SELECT id FROM brand_kits WHERE id=?").get(brand)))return bad("Pilih Brand Kit yang tersedia.");
++  const name=String(body.name??'Template brand').trim();if(!name||name.length>100)return bad("Nama template tidak valid.");
++  const result=cloneDocument(source);assets=result.assets;const doc=result.doc;
++  doc.title=using?(doc.title+' salinan').slice(0,120):name;
++  const id=db.transaction(()=>{
++   const id=Number(db.prepare("INSERT INTO designs(title,format,width,height,style,doc_json,is_saved) VALUES(?,?,?,?,?,?,1)").run(doc.title,doc.format,doc.width,doc.height,'editor',JSON.stringify(doc)).lastInsertRowid);
++   db.prepare("INSERT INTO design_revisions(design_id) VALUES(?)").run(id);
++   for(const a of assets)db.prepare("INSERT INTO design_assets(id,design_id,width,height) VALUES(?,?,?,?)").run(a.id,id,a.width,a.height);
++   if(!using)db.prepare("INSERT INTO brand_templates(design_id,brand_id,name) VALUES(?,?,?)").run(id,brand,name);
++   logActivity(using?'Gunakan template brand':'Simpan template brand','design',id,null);return id;
++  })();persisted=true;return NextResponse.json({id,doc,revision:1},{status:201});
++ }catch(e){return bad(e instanceof Error?e.message:"Template gagal diproses.");}
++ finally{if(!persisted)for(const a of assets)fs.rmSync(designAssetPath(a.id)!,{force:true});}
++}
++export async function DELETE(req:Request){
++ const id=Number(new URL(req.url).searchParams.get('id')),db=getDb();if(!Number.isSafeInteger(id)||id<=0)return bad("ID tidak valid.");
++ if(!db.prepare("SELECT design_id FROM brand_templates WHERE design_id=?").get(id))return bad("Template tidak ditemukan.",404);
++ const assets=db.prepare("SELECT id FROM design_assets WHERE design_id=?").all(id) as {id:string}[];
++ db.transaction(()=>{db.prepare("DELETE FROM designs WHERE id=?").run(id);logActivity('Hapus template brand','design',id,null);})();
++ for(const a of assets)fs.rmSync(designAssetPath(a.id)!,{force:true});return NextResponse.json({ok:true});
++}
+diff --git a/app/api/content/route.ts b/app/api/content/route.ts
+index 2173efe..da61f82 100644
+--- a/app/api/content/route.ts
++++ b/app/api/content/route.ts
+@@ -1,3 +1,5 @@
++import { selectedBrand } from "@/lib/brands";
++import { validateBrandSnapshot } from "@/lib/brand-options";
+ import { NextResponse } from "next/server";
+ import { getDb, getSetting, logActivity } from "@/lib/db";
+ import { ollamaGenerate } from "@/lib/ollama";
+@@ -5,7 +7,10 @@ import { buildPrompt, cleanOutput, CONTENT_TYPES, isContentType, isTone } from "
+ 
+ const g = globalThis as unknown as { __autofeedsGenBusy?: boolean };
+ 
+-const SELECT_COLS = `id, image_id, content_type, tone, content, is_edited, is_saved, created_at, updated_at`;
++const SELECT_COLS = `id, image_id, content_type, tone, content, is_edited, is_saved, created_at, updated_at,
++ (SELECT language FROM content_context c WHERE c.content_id=generated_contents.id) AS language,
++ (SELECT json_extract(snapshot_json,'$.brand.name') FROM content_context c WHERE c.content_id=generated_contents.id) AS brand_name,
++ EXISTS(SELECT 1 FROM content_context c WHERE c.content_id=generated_contents.id) AS can_regenerate`;
+ 
+ // Daftar konten: ?image_id=5  atau  ?saved=1
+ export async function GET(req: Request) {
+@@ -37,69 +42,54 @@ export async function POST(req: Request) {
+   }
+   g.__autofeedsGenBusy = true;
+   try {
+-    const body = (await req.json()) as Record<string, unknown>;
+-    const imageId = Number(body.image_id);
+-    const type = String(body.content_type ?? "");
+-    const tone = String(body.tone ?? "");
+-    const extra = String(body.extra ?? "").slice(0, 1000);
+-
+-    if (!Number.isInteger(imageId) || imageId <= 0 || !isContentType(type) || !isTone(tone)) {
+-      return NextResponse.json({ error: "Permintaan tidak valid." }, { status: 400 });
+-    }
+-
+-    const db = getDb();
+-    const analysis = db
+-      .prepare(
+-        `SELECT id, description, objects, dominant_colors, visible_text, context
+-         FROM image_analysis WHERE image_id = ? ORDER BY id DESC LIMIT 1`
+-      )
+-      .get(imageId) as
+-      | {
+-          id: number;
+-          description: string | null;
+-          objects: string | null;
+-          dominant_colors: string | null;
+-          visible_text: string | null;
+-          context: string | null;
+-        }
+-      | undefined;
+-    if (!analysis) {
+-      return NextResponse.json(
+-        { error: "Gambar ini belum dianalisis. Jalankan analisis dulu." },
+-        { status: 400 }
+-      );
+-    }
+-
+-    const prompt = buildPrompt({
+-      type,
+-      tone,
+-      description: analysis.description ?? "",
+-      objects: analysis.objects ?? "",
+-      colors: analysis.dominant_colors ?? "",
+-      visibleText: analysis.visible_text ?? "",
+-      context: analysis.context ?? "",
+-      extra,
+-    });
+-
+-    const model = getSetting("text_model");
+-        const rawText = await ollamaGenerate({ model, prompt, temperature: 0.7 });
+-    const text = cleanOutput(rawText, extra);
+-    if (!text) {
+-      return NextResponse.json({ error: "AI tidak menghasilkan teks. Coba lagi." }, { status: 502 });
++    const raw=await req.text();
++    if(raw.length>20000)return NextResponse.json({error:"Permintaan terlalu besar."},{status:413});
++    let body:Record<string,unknown>;
++    try{body=JSON.parse(raw);if(!body||typeof body!=="object"||Array.isArray(body))throw new Error();}catch{return NextResponse.json({error:"JSON tidak valid."},{status:400});}
++    const db=getDb();let parent:number|null=null;
++    let snapshot: {image_id:number;content_type:string;tone:string;extra:string;language:"id"|"en";brand:ReturnType<typeof selectedBrand>;facts:{description:string;objects:string;colors:string;visibleText:string;context:string};analysis_id:number|null;source_mode:string};
++    if(body.source_content_id!==undefined){
++      parent=Number(body.source_content_id);
++      if(!Number.isSafeInteger(parent)||parent<=0)return NextResponse.json({error:"ID konten tidak valid."},{status:400});
++      const source=db.prepare("SELECT snapshot_json FROM content_context WHERE content_id=?").get(parent) as {snapshot_json:string}|undefined;
++      if(!source)return NextResponse.json({error:"Konten lama belum memiliki snapshot. Gunakan formulir untuk membuat konten baru."},{status:409});
++      snapshot=JSON.parse(source.snapshot_json);snapshot.brand=validateBrandSnapshot(snapshot.brand);
++    }else{
++      const imageId=Number(body.image_id),type=String(body.content_type??""),tone=String(body.tone??"");
++      const language=body.language??getSetting("default_language")??"id";
++      if(!Number.isSafeInteger(imageId)||imageId<=0||!isContentType(type)||!isTone(tone)||!["id","en"].includes(String(language)))return NextResponse.json({error:"Permintaan tidak valid."},{status:400});
++      if(!db.prepare("SELECT id FROM images WHERE id=?").get(imageId))return NextResponse.json({error:"Foto tidak ditemukan."},{status:404});
++      const extra=String(body.extra??"").slice(0,1000);let brand;
++      try{brand=selectedBrand(body.brand_kit_id);}catch(e){return NextResponse.json({error:(e as Error).message},{status:400});}
++      let facts:{description:string;objects:string;colors:string;visibleText:string;context:string},analysisId:number|null=null,sourceMode='analysis';
++      if(body.manual_facts!==undefined){
++        const manual=body.manual_facts as Record<string,unknown>;
++        if(!manual||typeof manual!=="object"||Array.isArray(manual)||typeof manual.description!=="string"||manual.description.trim().length<3)return NextResponse.json({error:"Isi deskripsi fakta produk manual minimal 3 karakter."},{status:400});
++        const read=(key:string,max:number)=>typeof manual[key]==='string'?String(manual[key]).trim().slice(0,max):'';
++        facts={description:read('description',2000),objects:read('objects',500),colors:read('dominant_colors',200),visibleText:read('visible_text',1000),context:read('context',500)};sourceMode='manual';
++      }else{
++        const analysis=db.prepare("SELECT id,description,objects,dominant_colors,visible_text,context FROM image_analysis WHERE image_id=? ORDER BY id DESC LIMIT 1").get(imageId) as {id:number;description:string;objects:string;dominant_colors:string;visible_text:string;context:string}|undefined;
++        if(!analysis)return NextResponse.json({error:"Jalankan analisis atau isi fakta produk manual."},{status:400});
++        analysisId=analysis.id;facts={description:analysis.description??'',objects:analysis.objects??'',colors:analysis.dominant_colors??'',visibleText:analysis.visible_text??'',context:analysis.context??''};
++      }
++      snapshot={image_id:imageId,content_type:type,tone,extra,language:language as 'id'|'en',brand,facts,analysis_id:analysisId,source_mode:sourceMode};
+     }
+-
+-    const result = db
+-      .prepare(
+-        `INSERT INTO generated_contents (image_id, analysis_id, content_type, tone, content, model)
+-         VALUES (?, ?, ?, ?, ?, ?)`
+-      )
+-      .run(imageId, analysis.id, type, tone, text, model);
+-    const id = Number(result.lastInsertRowid);
+-    const label = CONTENT_TYPES.find((t) => t.id === type)?.label ?? type;
+-    logActivity("Buat konten", "content", id, `${label} (${tone})`);
+-
+-    const row = db.prepare(`SELECT ${SELECT_COLS} FROM generated_contents WHERE id = ?`).get(id);
+-    return NextResponse.json({ content: row }, { status: 201 });
++    if(!db.prepare("SELECT id FROM images WHERE id=?").get(snapshot.image_id))return NextResponse.json({error:"Foto sumber sudah dihapus."},{status:404});
++    const prompt=buildPrompt({type:snapshot.content_type,tone:snapshot.tone,...snapshot.facts,extra:snapshot.extra,language:snapshot.language,brand:snapshot.brand});
++    const model=getSetting("text_model");
++    const rawText=await ollamaGenerate({model,prompt,temperature:.7});
++    const allowed=snapshot.extra+(snapshot.source_mode==='manual'?' '+snapshot.facts.description+' '+snapshot.facts.visibleText:'');
++    const text=cleanOutput(rawText,allowed);
++    if(!text)return NextResponse.json({error:"AI tidak menghasilkan teks. Coba lagi."},{status:502});
++    const id=db.transaction(()=>{
++      const analysisId=snapshot.analysis_id&&db.prepare('SELECT id FROM image_analysis WHERE id=?').get(snapshot.analysis_id)?snapshot.analysis_id:null;
++      const result=db.prepare("INSERT INTO generated_contents(image_id,analysis_id,content_type,tone,content,model) VALUES(?,?,?,?,?,?)").run(snapshot.image_id,analysisId,snapshot.content_type,snapshot.tone,text,model);
++      const id=Number(result.lastInsertRowid);
++      db.prepare("INSERT INTO content_context(content_id,language,snapshot_json,parent_content_id) VALUES(?,?,?,?)").run(id,snapshot.language,JSON.stringify(snapshot),parent);
++      const label=CONTENT_TYPES.find(t=>t.id===snapshot.content_type)?.label??snapshot.content_type;
++      logActivity("Buat konten","content",id,`${label}; ${snapshot.language}; ${snapshot.source_mode}`);return id;
++    })();
++    return NextResponse.json({content:db.prepare(`SELECT ${SELECT_COLS} FROM generated_contents WHERE id=?`).get(id)},{status:201});
+   } catch (e) {
+     return NextResponse.json(
+       { error: e instanceof Error ? e.message : "Gagal membuat konten." },
+diff --git a/app/api/design-brand/route.ts b/app/api/design-brand/route.ts
+new file mode 100644
+index 0000000..52595e3
+--- /dev/null
++++ b/app/api/design-brand/route.ts
+@@ -0,0 +1,31 @@
++import fs from "node:fs";
++import crypto from "node:crypto";
++import {NextResponse} from "next/server";
++import {getDb} from "@/lib/db";
++import {selectedBrand,brandAssetPath} from "@/lib/brands";
++import {designAssetPath} from "@/lib/design-storage";
++import {validateDocument} from "@/lib/design-document";
++import {applyBrandDocument} from "@/lib/brand-document";
++const bad=(error:string,status=400)=>NextResponse.json({error},{status});
++export async function POST(req:Request){
++ let copied:string|undefined,persisted=false;
++ try{
++  const raw=await req.text();if(raw.length>2_000_000)return bad('Dokumen terlalu besar.',413);
++  const body=JSON.parse(raw),id=Number(body?.design_id),revision=body?.revision,doc=validateDocument(body.doc),db=getDb();
++  if(!Number.isSafeInteger(id)||id<=0)return bad('ID desain tidak valid.');
++  const current=db.prepare('SELECT revision FROM design_revisions WHERE design_id=?').get(id) as {revision:number}|undefined;
++  if(!current)return bad('Dokumen tidak ditemukan.',404);if(current.revision!==revision)return bad('Revisi berubah. Muat ulang atau salin dokumen.',409);
++  for(const l of doc.layers)if(l.kind==='image'&&!db.prepare('SELECT id FROM design_assets WHERE id=? AND design_id=?').get(l.assetId,id))return bad('Aset bukan milik dokumen.');
++  const brand=selectedBrand(body.brand_kit_id);if(!brand)return bad('Pilih Brand Kit terlebih dahulu.');
++  let logo:{id:string;width:number;height:number}|undefined;
++  if(brand.logo_asset_id){
++   const asset=db.prepare('SELECT width,height FROM brand_assets WHERE id=?').get(brand.logo_asset_id) as {width:number;height:number}|undefined;
++   const source=brandAssetPath(brand.logo_asset_id);if(!asset||!source||!fs.existsSync(source))return bad('Logo brand tidak tersedia.');
++   copied=crypto.randomUUID();fs.copyFileSync(source,designAssetPath(copied)!,fs.constants.COPYFILE_EXCL);logo={id:copied,...asset};
++  }
++  const next=validateDocument(applyBrandDocument(doc,brand,logo));
++  if(logo)db.prepare('INSERT INTO design_assets(id,design_id,width,height) VALUES(?,?,?,?)').run(logo.id,id,logo.width,logo.height);
++  persisted=true;return NextResponse.json({doc:next,revision,brand_name:brand.name});
++ }catch(e){return bad(e instanceof Error?e.message:'Brand gagal diterapkan.');}
++ finally{if(copied&&!persisted)fs.rmSync(designAssetPath(copied)!,{force:true});}
++}
+diff --git a/app/api/designs/route.ts b/app/api/designs/route.ts
+index 52aa62c..0ebe8dc 100644
+--- a/app/api/designs/route.ts
++++ b/app/api/designs/route.ts
+@@ -1,15 +1,14 @@
+ import fs from "node:fs";
+-import crypto from "node:crypto";
+ import { NextResponse } from "next/server";
+ import { getDb, logActivity } from "@/lib/db";
+ import { DESIGN_FORMATS, newLayer, validateDocument, type DesignDocument } from "@/lib/design-document";
+-import { designAssetPath, tracePromo } from "@/lib/design-storage";
++import { cloneDocument, designAssetPath, tracePromo } from "@/lib/design-storage";
+ const bad = (error: string, status=400) => NextResponse.json({error},{status});
+ const idOk = (n: number) => Number.isSafeInteger(n)&&n>0;
+ const SELECT = `SELECT d.id,d.title,d.format,d.width,d.height,d.updated_at,r.revision,r.source_promo_id FROM designs d JOIN design_revisions r ON r.design_id=d.id`;
+ export async function GET(req: Request) {
+   const id = new URL(req.url).searchParams.get("id"), db=getDb();
+-  if (id === null) return NextResponse.json({designs:db.prepare(`${SELECT} ORDER BY d.id DESC LIMIT 100`).all()});
++  if (id === null) return NextResponse.json({designs:db.prepare(`${SELECT} WHERE NOT EXISTS(SELECT 1 FROM brand_templates t WHERE t.design_id=d.id) ORDER BY d.id DESC LIMIT 100`).all()});
+   if (!idOk(Number(id))) return bad("ID desain tidak valid.");
+   const row=db.prepare(`SELECT d.doc_json,r.revision FROM designs d JOIN design_revisions r ON r.design_id=d.id WHERE d.id=?`).get(Number(id)) as {doc_json:string;revision:number}|undefined;
+   if(!row)return bad("Desain tidak ditemukan.",404);
+@@ -25,22 +24,8 @@ export async function POST(req: Request) {
+     if (body.copy_id !== undefined) {
+       const sourceId=Number(body.copy_id);
+       if(!idOk(sourceId)||body.promo_id!==undefined)return bad("Dokumen sumber tidak valid.");
+-      const db=getDb(),original=db.prepare("SELECT doc_json FROM designs d JOIN design_revisions r ON r.design_id=d.id WHERE d.id=?").get(sourceId) as {doc_json:string}|undefined;
+-      if(!original)return bad("Dokumen sumber tidak ditemukan.",404);
+-      doc=validateDocument(body.doc??JSON.parse(original.doc_json));
++      const result=cloneDocument(sourceId,body.doc);doc=result.doc;assets=result.assets;
+       doc.title=(doc.title+" salinan").slice(0,120);
+-      const mapping=new Map<string,string>();
+-      for(const layer of doc.layers)if(layer.kind==="image"){
+-        const oldId=layer.assetId!;
+-        if(!mapping.has(oldId)){
+-          const asset=db.prepare("SELECT width,height FROM design_assets WHERE id=? AND design_id=?").get(oldId,sourceId) as {width:number;height:number}|undefined;
+-          const file=designAssetPath(oldId);
+-          if(!asset||!file||!fs.existsSync(file))throw new Error("Aset sumber hilang atau bukan milik dokumen.");
+-          const newId=crypto.randomUUID();fs.copyFileSync(file,designAssetPath(newId)!,fs.constants.COPYFILE_EXCL);
+-          assets.push({id:newId,...asset});mapping.set(oldId,newId);
+-        }
+-        layer.assetId=mapping.get(oldId)!;
+-      }
+     } else if (body.promo_id !== undefined) {
+       source=Number(body.promo_id); if (!idOk(source)) return bad("ID poster tidak valid.");
+       const result=await tracePromo(source);doc=result.doc;assets=result.assets;
+diff --git a/app/api/promo/route.ts b/app/api/promo/route.ts
+index e12f784..0187470 100644
+--- a/app/api/promo/route.ts
++++ b/app/api/promo/route.ts
+@@ -1,4 +1,6 @@
+ import fs from "node:fs";
++import { selectedBrand, rendererBrand } from "@/lib/brands";
++import { validateBrandSnapshot, type BrandSnapshot } from "@/lib/brand-options";
+ import { createPromoBatch, nextVariationStyle, variationCount, variationStyles } from "@/lib/promo-variations";
+ import crypto from "node:crypto";
+ import { NextResponse } from "next/server";
+@@ -50,6 +52,7 @@ export async function POST(req: Request) {
+     try { count = variationCount(body.count); } catch (e) { return bad((e as Error).message); }
+     const isRegenerate = body.regenerate_id !== undefined;
+     const isMore = body.source_id !== undefined;
++    let frozenBrand: BrandSnapshot | null = null;
+     let parentId: number | null = null;
+     let layoutVariant = crypto.randomInt(0, 2);
+     if (isRegenerate && isMore) return bad("Pilih satu tindakan pembuatan variasi.");
+@@ -62,15 +65,18 @@ export async function POST(req: Request) {
+       if (!source) return bad("Desain tidak ditemukan.", 404);
+       if (!source.request_json) return bad("Desain lama belum menyimpan pengaturan. Buat desain baru dari formulir terlebih dahulu.", 409);
+       body = JSON.parse(source.request_json) as Record<string, unknown>;
++      frozenBrand = validateBrandSnapshot(body.brand_snapshot);
+       layoutVariant = source.layout_variant === 1 ? 0 : 1;
+       body.style = nextVariationStyle(source.style ?? "retail");
+       if (isRegenerate) count = 1;
+       else if (count === 1) return bad("Variasi tambahan harus berjumlah 4, 5, atau 6.");
+     }
+-    const format = clean(body.format, 20);
++    let brand: BrandSnapshot | null;
++    try { brand = isRegenerate || isMore ? frozenBrand : selectedBrand(body.brand_kit_id); } catch(e) { return bad((e as Error).message); }
++    const format = clean(body.format ?? brand?.promo_format, 20);
+     const theme = clean(body.theme, 20);
+     const type = clean(body.promo_type, 20);
+-    const style = clean(body.style ?? "retail", 20);
++    const style = clean(body.style ?? brand?.promo_style ?? "retail", 20);
+     if (!PROMO_STYLES.some((s) => s.id === style)) return bad("Konsep desain tidak valid.");
+ 
+     if (!PROMO_FORMATS.some((f) => f.id === format)) return bad("Ukuran tidak valid.");
+@@ -161,7 +167,7 @@ export async function POST(req: Request) {
+       bundle = { label: "PAKET HEMAT", price_text: formatRupiah(bp), old_text: oldText, tag };
+     }
+ 
+-    const title = clean(body.title, 40);
++    const title = clean(body.title ?? brand?.promo_title, 40);
+     const seed = crypto.randomInt(1, 2_000_000_000);
+     const spec: PromoSpec = {
+       format,
+@@ -171,14 +177,15 @@ export async function POST(req: Request) {
+       mode: type === "bundling" ? "bundle" : "items",
+       title,
+       subtitle: clean(body.subtitle, 80),
+-      footer: clean(body.footer, 80),
+-      badge: clean(body.badge, 16),
++      footer: clean(body.footer ?? brand?.footer_text, 80),
++      brand: rendererBrand(brand),
++      badge: clean(body.badge ?? brand?.promo_badge, 16),
+       items,
+       bundle,
+     };
+     const styles = variationStyles(style, count, crypto.randomInt(0, 5));
+     const request = {
+-      format, theme, promo_type: type, title, subtitle: spec.subtitle, footer: spec.footer, badge: spec.badge,
++      brand_snapshot: brand, format, theme, promo_type: type, title, subtitle: spec.subtitle, footer: spec.footer, badge: spec.badge,
+       discount_percent: params.discountPercent, discount_amount: params.discountAmount,
+       buy_qty: params.buyQty, free_qty: params.freeQty, bundle_price: params.bundlePrice,
+       items: rawItems.map((r, index) => ({ image_id: Number(r.image_id), variant_id: r.variant_id == null ? null : Number(r.variant_id),
+@@ -191,7 +198,7 @@ export async function POST(req: Request) {
+       const ids: number[] = [];
+       for (let index = 0; index < files.length; index++) {
+         const current = specs[index];
+-        const meta = { promo_type: type, style: current.style, seed: current.seed, layout_variant: layoutVariant,
++        const meta = { brand_snapshot: brand, promo_type: type, style: current.style, seed: current.seed, layout_variant: layoutVariant,
+           items: items.map(i => ({ image_id: i.image_id, variant_id: i.variant_id, name: i.name, price: i.price_text, old: i.old_text, tag: i.tag })), bundle };
+         const result = db.prepare(`INSERT INTO promo_designs (title, layout_format, theme, items_json, output_filename) VALUES (?, ?, ?, ?, ?)`)
+           .run(title || "Promo", format, theme, JSON.stringify(meta), files[index]);
+diff --git a/app/brand-kit/page.tsx b/app/brand-kit/page.tsx
+new file mode 100644
+index 0000000..1466f24
+--- /dev/null
++++ b/app/brand-kit/page.tsx
+@@ -0,0 +1,54 @@
++"use client";
++/* eslint-disable @next/next/no-img-element */
++import {useEffect,useRef,useState} from "react";
++import {useRouter} from "next/navigation";
++import {BRAND_DEFAULTS,BRAND_FONTS,type BrandFields,type BrandKit} from "@/lib/brand-options";
++import {PROMO_STYLES,PROMO_FORMATS} from "@/lib/promo-options";
++import {TONES} from "@/lib/content";
++type Template={design_id:number;name:string;brand_id:number|null;brand_name:string|null};
++type Design={id:number;title:string};
++const field='mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm';
++const button='rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm disabled:opacity-40';
++async function api(url:string,body?:unknown,method='POST'){const r=await fetch(url,body===undefined?{cache:'no-store'}:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await r.json();if(!r.ok)throw new Error(data.error||'Permintaan gagal.');return data;}
++export default function BrandKitPage(){
++ const router=useRouter(),upload=useRef<HTMLInputElement>(null);
++ const [kits,setKits]=useState<BrandKit[]>([]),[draft,setDraft]=useState<BrandFields>({...BRAND_DEFAULTS}),[editing,setEditing]=useState<BrandKit|null>(null);
++ const [logoImage,setLogoImage]=useState<number|null>(null),[removeLogo,setRemoveLogo]=useState(false),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState('');
++ const [templates,setTemplates]=useState<Template[]>([]),[designs,setDesigns]=useState<Design[]>([]),[designId,setDesignId]=useState(0),[templateName,setTemplateName]=useState('Template promosi');
++ async function refresh(){const [brands,templates,list]=await Promise.all([api('/api/brand-kits'),api('/api/brand-templates'),api('/api/designs')]);setKits(brands.kits);setTemplates(templates.templates);setDesigns(list.designs);setDesignId(current=>current||list.designs[0]?.id||0);return brands.kits as BrandKit[];}
++ useEffect(()=>{(async()=>{try{const data=await refresh();if(!data.length)setDraft({...BRAND_DEFAULTS,is_default:true});}catch(e){setError((e as Error).message);}finally{setLoading(false);}})();},[]);
++ function select(kit:BrandKit|null){setEditing(kit);setDraft(kit?{...kit}:{...BRAND_DEFAULTS,is_default:kits.length===0});setLogoImage(null);setRemoveLogo(false);setError('');setNotice('');}
++ async function uploadFile(file:File){setBusy(true);setError('');try{const form=new FormData();form.append('file',file);form.append('name','Logo '+(draft.name||file.name));const r=await fetch('/api/images',{method:'POST',body:form}),data=await r.json();if(!r.ok)throw new Error(data.error||'Upload gagal.');setLogoImage(data.id);setRemoveLogo(false);setNotice('Logo siap. Klik Simpan Brand Kit untuk menerapkannya.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++ async function save(){setBusy(true);setError('');try{const result=await api('/api/brand-kits',{...draft,...(editing?{id:editing.id,revision:editing.revision}:{}),logo_image_id:logoImage,remove_logo:removeLogo},editing?'PATCH':'POST');await refresh();setEditing(result.kit);setDraft(result.kit);setLogoImage(null);setRemoveLogo(false);setNotice('Brand Kit tersimpan.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++ async function remove(){if(!editing||!confirm('Hapus Brand Kit ini? Poster, konten, dan template yang sudah tersimpan tetap tersedia.'))return;setBusy(true);setError('');try{await api(`/api/brand-kits?id=${editing.id}`,{},'DELETE');await refresh();select(null);setNotice('Brand Kit dihapus.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++ async function saveTemplate(){if(!editing)return;setBusy(true);setError('');try{await api('/api/brand-templates',{brand_id:editing.id,design_id:designId,name:templateName});await refresh();setNotice('Template brand tersimpan sebagai salinan mandiri.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++ async function openTemplate(template:Template){setBusy(true);setError('');try{const result=await api('/api/brand-templates',{use_id:template.design_id});router.push(`/editor?id=${result.id}`);}catch(e){setError((e as Error).message);setBusy(false);}}
++ async function removeTemplate(template:Template){if(!confirm('Hapus template ini? Dokumen yang sudah dibuat dari template tetap tersedia.'))return;setBusy(true);setError('');try{await api(`/api/brand-templates?id=${template.design_id}`,{},'DELETE');await refresh();setNotice('Template dihapus.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++ const logo=removeLogo?null:logoImage?`/api/image-file?id=${logoImage}`:editing?.logo_asset_id?`/api/brand-logo?id=${editing.logo_asset_id}`:null;
++ return <div className="mx-auto max-w-6xl space-y-5">
++  <header><h1 className="text-2xl font-bold text-slate-900">Brand Kit</h1><p className="mt-1 text-sm text-slate-500">Simpan identitas brand untuk poster, editor, dan Content Studio. Hasil lama tetap memakai identitas yang tersimpan saat dibuat.</p></header>
++  {error&&<p role="alert" className="rounded-xl bg-rose-50 p-4 text-sm text-rose-700">{error}</p>}{notice&&<p role="status" className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">{notice}</p>}
++  {loading?<p>Memuat Brand Kit…</p>:<fieldset disabled={busy} className="min-w-0 space-y-5">
++   <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
++    <aside className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4"><button onClick={()=>select(null)} className={button+' w-full'}>+ Brand Kit baru</button>{kits.map(kit=><button key={kit.id} onClick={()=>select(kit)} className={`w-full rounded-xl border p-3 text-left ${editing?.id===kit.id?'border-indigo-500 bg-indigo-50':'border-slate-200'}`}><strong className="block text-sm">{kit.name}{kit.is_default?' ★':''}</strong><span className="mt-2 flex gap-1">{[kit.primary_color,kit.secondary_color,kit.accent_color].map((color,i)=><span key={i} style={{background:color}} className="h-4 w-6 rounded"/>)}</span></button>)}</aside>
++    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
++     <h2 className="font-semibold">{editing?'Edit Brand Kit':'Brand Kit baru'}</h2>
++     <label className="block text-sm">Nama brand<input aria-label="Nama brand" maxLength={100} value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} className={field}/></label>
++     <div className="flex flex-wrap items-center gap-3">{logo?<img src={logo} alt="Preview logo brand" className="h-20 max-w-48 rounded-lg border bg-slate-50 object-contain p-2"/>:<span className="rounded-lg border border-dashed p-5 text-xs text-slate-500">Belum ada logo</span>}<button onClick={()=>upload.current?.click()} className={button}>Upload logo</button><button onClick={()=>{setLogoImage(null);setRemoveLogo(true);}} className={button}>Lepas logo</button><input ref={upload} type="file" aria-label="File logo brand" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={e=>{const file=e.target.files?.[0];if(file)void uploadFile(file);e.target.value='';}}/></div>
++     <div className="grid gap-3 sm:grid-cols-3">{(['primary_color','secondary_color','accent_color'] as const).map((key,i)=><label key={key} className="text-sm">{['Warna utama','Warna sekunder','Warna aksen'][i]}<div className="mt-1 flex items-center gap-2"><input aria-label={key} type="color" value={draft[key]} onChange={e=>setDraft({...draft,[key]:e.target.value})}/><span className="text-xs text-slate-500">{draft[key]}</span></div></label>)}</div>
++     <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Font utama<select value={draft.font_family} onChange={e=>setDraft({...draft,font_family:e.target.value})} className={field}>{BRAND_FONTS.map(font=><option key={font}>{font}</option>)}</select></label><label className="text-sm">Footer / kontak<input aria-label="Footer brand" maxLength={80} value={draft.footer_text} onChange={e=>setDraft({...draft,footer_text:e.target.value})} className={field}/></label></div>
++     <label className="block text-sm">Panduan gaya bahasa<textarea aria-label="Panduan gaya bahasa" rows={3} maxLength={600} value={draft.voice} onChange={e=>setDraft({...draft,voice:e.target.value})} className={field} placeholder="Contoh: ramah, jelas, gunakan sapaan Kak, jangan berlebihan."/></label>
++     <h3 className="text-sm font-semibold">Pengaturan awal promosi</h3>
++     <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Konsep<select value={draft.promo_style} onChange={e=>setDraft({...draft,promo_style:e.target.value})} className={field}>{PROMO_STYLES.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Ukuran<select value={draft.promo_format} onChange={e=>setDraft({...draft,promo_format:e.target.value})} className={field}>{PROMO_FORMATS.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Judul awal<input maxLength={40} value={draft.promo_title} onChange={e=>setDraft({...draft,promo_title:e.target.value})} className={field}/></label><label className="text-sm">Badge awal<input maxLength={16} value={draft.promo_badge} onChange={e=>setDraft({...draft,promo_badge:e.target.value})} className={field}/></label><label className="text-sm">Gaya konten<select value={draft.tone} onChange={e=>setDraft({...draft,tone:e.target.value})} className={field}>{TONES.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label className="text-sm">Bahasa konten<select value={draft.language} onChange={e=>setDraft({...draft,language:e.target.value})} className={field}><option value="id">Indonesia</option><option value="en">English</option></select></label></div>
++     <label className="flex gap-2 text-sm"><input type="checkbox" checked={draft.is_default} onChange={e=>setDraft({...draft,is_default:e.target.checked})}/>Gunakan sebagai Brand Kit default</label>
++     <div className="flex flex-wrap gap-2"><button onClick={save} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white">{busy?'Menyimpan…':'Simpan Brand Kit'}</button>{editing&&<button onClick={remove} className={button+' text-rose-600'}>Hapus Brand Kit</button>}</div>
++    </section>
++   </div>
++   <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">Template brand</h2><p className="text-sm text-slate-500">Template menyimpan tampilan dokumen editor beserta asetnya. Terapkan Brand Kit di editor sebelum menyimpan template; setiap pemakaian membuat dokumen baru.</p>
++    {editing&&<div className="grid items-end gap-3 sm:grid-cols-3"><label className="text-sm">Dokumen editor<select value={designId||''} onChange={e=>setDesignId(Number(e.target.value))} className={field}><option value="">Pilih dokumen</option>{designs.map(d=><option key={d.id} value={d.id}>{d.title}</option>)}</select></label><label className="text-sm">Nama template<input maxLength={100} value={templateName} onChange={e=>setTemplateName(e.target.value)} className={field}/></label><button disabled={!designId} onClick={saveTemplate} className={button}>Simpan template untuk brand ini</button></div>}
++    {!editing&&<p className="text-sm text-slate-500">Pilih Brand Kit tersimpan untuk menambahkan template.</p>}
++    <div className="grid gap-3 sm:grid-cols-2">{templates.map(t=><div key={t.design_id} className="rounded-xl border border-slate-200 p-4"><strong className="text-sm">{t.name}</strong><p className="mt-1 text-xs text-slate-500">{t.brand_name??'Brand sudah dihapus; template tetap tersedia'}</p><div className="mt-3 flex gap-2"><button onClick={()=>void openTemplate(t)} className={button}>Gunakan template</button><button onClick={()=>void removeTemplate(t)} className={button+' text-rose-600'}>Hapus template</button></div></div>)}</div>
++   </section>
++  </fieldset>}
++ </div>;
++}
+diff --git a/app/content-studio/page.tsx b/app/content-studio/page.tsx
+index deab118..ba4c7b6 100644
+--- a/app/content-studio/page.tsx
++++ b/app/content-studio/page.tsx
+@@ -1,6 +1,7 @@
+ "use client";
+ /* eslint-disable @next/next/no-img-element */
+ 
++import type {BrandKit} from "@/lib/brand-options";
+ import { useCallback, useEffect, useState } from "react";
+ import {
+   Loader2,
+@@ -32,12 +33,17 @@ type Item = {
+   is_edited: number;
+   is_saved: number;
+   created_at: string;
++  language?: string | null;
++  brand_name?: string | null;
++  can_regenerate?: number;
+ };
+ 
+ const typeLabel = (id: string) => CONTENT_TYPES.find((t) => t.id === id)?.label ?? id;
+ const toneLabel = (id: string | null) => TONES.find((t) => t.id === id)?.label ?? "";
+ 
+ export default function ContentStudioPage() {
++  const [metadataLoading,setMetadataLoading]=useState(true);
++  const [brands,setBrands]=useState<BrandKit[]>([]),[brandId,setBrandId]=useState(0),[language,setLanguage]=useState("id"),[manualMode,setManualMode]=useState(false);
+   const [images, setImages] = useState<Img[]>([]);
+   const [selected, setSelected] = useState<number | null>(null);
+   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+@@ -65,6 +71,7 @@ export default function ContentStudioPage() {
+   const loadContents = useCallback(async (imageId: number) => {
+     const res = await fetch(`/api/content?image_id=${imageId}`, { cache: "no-store" });
+     const data = await res.json();
++    if(!res.ok)throw new Error(data.error||"Gagal memuat konten.");
+     const list: Item[] = data.contents ?? [];
+     setItems(list);
+     setDrafts(Object.fromEntries(list.map((i) => [i.id, i.content])));
+@@ -75,10 +82,16 @@ export default function ContentStudioPage() {
+       try {
+         const res = await fetch("/api/images", { cache: "no-store" });
+         const data = await res.json();
++        if(!res.ok)throw new Error(data.error||'Gagal memuat gambar.');
+         setImages(data.images ?? []);
++        const [kitResponse,settingsResponse]=await Promise.all([fetch('/api/brand-kits',{cache:'no-store'}),fetch('/api/settings',{cache:'no-store'})]);
++        const kits=await kitResponse.json(),settings=await settingsResponse.json();
++        if(!kitResponse.ok||!settingsResponse.ok)throw new Error('Gagal memuat pengaturan konten.');
++        setBrands(kits.kits);const kit=kits.kits.find((k:BrandKit)=>k.is_default);
++        if(kit){setBrandId(kit.id);setTone(kit.tone);setLanguage(kit.language);}else setLanguage(settings.settings.default_language||'id');
+       } catch {
+-        setError("Gagal memuat daftar gambar.");
+-      }
++        setError("Gagal memuat daftar gambar atau pengaturan konten.");
++      } finally { setMetadataLoading(false); }
+     })();
+   }, []);
+ 
+@@ -86,6 +99,8 @@ export default function ContentStudioPage() {
+     setSelected(id);
+     setError("");
+     setAnalysis(null);
++    setForm({description:"",objects:"",dominant_colors:"",visible_text:"",context:""});
++    setManualMode(false);
+     setItems([]);
+     try {
+       const res = await fetch(`/api/analyze?image_id=${id}`, { cache: "no-store" });
+@@ -108,7 +123,7 @@ export default function ContentStudioPage() {
+   }
+ 
+   async function saveAnalysis(): Promise<boolean> {
+-    if (!analysis) return false;
++    if (!analysis || manualMode) return true;
+     const res = await fetch("/api/analysis", {
+       method: "PATCH",
+       headers: { "Content-Type": "application/json" },
+@@ -136,6 +151,9 @@ export default function ContentStudioPage() {
+           content_type: useType,
+           tone: useTone,
+           extra,
++          language,
++          brand_kit_id: brandId,
++          ...(!analysis||manualMode?{manual_facts:form}:{}),
+         }),
+       });
+       const data = await res.json();
+@@ -148,6 +166,11 @@ export default function ContentStudioPage() {
+     }
+   }
+ 
++  async function regenerate(id:number){
++    if(selected===null)return;setGenerating(true);setError("");
++    try{const response=await fetch('/api/content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_content_id:id})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Gagal membuat ulang konten.');await loadContents(selected);flash('Konten baru dibuat dari fakta dan brand tersimpan.');}catch(e){setError((e as Error).message);}finally{setGenerating(false);}
++  }
++
+   async function patchItem(item: Item, patch: { content?: string; is_saved?: boolean }) {
+     try {
+       const res = await fetch("/api/content", {
+@@ -227,6 +250,7 @@ export default function ContentStudioPage() {
+         </div>
+       )}
+ 
++      <fieldset disabled={generating||metadataLoading} className="min-w-0">
+       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+         <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+           <h2 className="mb-3 text-sm font-semibold text-slate-900">Pilih gambar ({images.length})</h2>
+@@ -262,16 +286,14 @@ export default function ContentStudioPage() {
+             <div className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm ring-1 ring-slate-200">
+               Pilih satu gambar di sebelah kiri.
+             </div>
+-          ) : !analysis ? (
+-            <div className="rounded-2xl bg-white p-6 text-sm text-slate-600 shadow-sm ring-1 ring-slate-200">
+-              Gambar ini belum dianalisis. Buka menu <b>AI Image Analyzer</b>, jalankan analisis, lalu kembali ke sini.
+-            </div>
+           ) : (
+             <>
+               <div className="space-y-3 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                 <h2 className="text-sm font-semibold text-slate-900">
+-                  Hasil analisis (boleh diedit jika ada yang keliru)
++                  {analysis&&!manualMode?"Hasil analisis (boleh diedit jika ada yang keliru)":"Fakta produk manual"}
+                 </h2>
++                {analysis&&<label className="flex gap-2 text-sm"><input type="checkbox" checked={manualMode} onChange={e=>setManualMode(e.target.checked)}/>Gunakan fakta manual untuk pembuatan ini</label>}
++                {!analysis&&<p className="text-xs text-slate-500">Belum ada analisis. Isi fakta produk yang Anda ketahui, atau jalankan AI Image Analyzer terlebih dahulu.</p>}
+                 {field("description", "Deskripsi", 3)}
+                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                   {field("objects", "Objek / produk")}
+@@ -292,6 +314,7 @@ export default function ContentStudioPage() {
+               </div>
+ 
+               <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
++                <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Brand Kit<select aria-label="Brand Kit konten" value={brandId} onChange={e=>{const id=Number(e.target.value);setBrandId(id);const kit=brands.find(k=>k.id===id);if(kit){setTone(kit.tone);setLanguage(kit.language);}}} className="mt-1 w-full rounded-lg border border-slate-300 p-2"><option value={0}>Tanpa Brand Kit</option>{brands.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}</select></label><label className="text-sm">Bahasa hasil<select aria-label="Bahasa hasil" value={language} onChange={e=>setLanguage(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 p-2"><option value="id">Indonesia</option><option value="en">English</option></select></label></div>
+                 <div>
+                   <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                     Jenis konten
+@@ -342,7 +365,7 @@ export default function ContentStudioPage() {
+                 </button>
+                 {generating && (
+                   <p className="text-xs text-slate-500">
+-                    Model teks berjalan di CPU, biasanya 10 detik sampai 1 menit.
++                    Menunggu Ollama yang terpasang. Durasi bergantung pada model dan perangkat.
+                   </p>
+                 )}
+               </div>
+@@ -356,6 +379,7 @@ export default function ContentStudioPage() {
+                     return (
+                       <div
+                         key={item.id}
++                        data-content-id={item.id}
+                         className="space-y-3 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200"
+                       >
+                         <div className="flex flex-wrap items-center gap-2 text-xs">
+@@ -367,6 +391,8 @@ export default function ContentStudioPage() {
+                               {toneLabel(item.tone)}
+                             </span>
+                           )}
++                          {item.brand_name&&<span className="rounded-full bg-slate-100 px-3 py-1">{item.brand_name}</span>}
++                          {item.language&&<span className="text-slate-500">{item.language==='en'?'English':'Indonesia'}</span>}
+                           {item.is_saved === 1 && (
+                             <span className="rounded-full bg-emerald-100 px-3 py-1 font-semibold text-emerald-700">
+                               Tersimpan di Library
+@@ -420,7 +446,7 @@ export default function ContentStudioPage() {
+                           </button>
+                           <button
+                             onClick={() =>
+-                              generate(item.content_type, item.tone ?? tone)
++                              item.can_regenerate?regenerate(item.id):generate(item.content_type, item.tone ?? tone)
+                             }
+                             disabled={generating}
+                             className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-2 text-slate-700 hover:bg-slate-200 disabled:opacity-60"
+@@ -443,6 +469,7 @@ export default function ContentStudioPage() {
+           )}
+         </section>
+       </div>
++      </fieldset>
+     </div>
+   );
+ }
+\ No newline at end of file
+diff --git a/app/editor/page.tsx b/app/editor/page.tsx
+index 8fd82f4..dc19348 100644
+--- a/app/editor/page.tsx
++++ b/app/editor/page.tsx
+@@ -2,6 +2,7 @@
+ 
+ import { useEffect, useRef, useState, useCallback } from "react";
+ import Link from "next/link";
++import type {BrandKit} from "@/lib/brand-options";
+ import { DESIGN_FORMATS, DESIGN_FONTS, constrainLayer, documentSvg, newLayer, resizeDocument, type DesignDocument, type DesignLayer } from "@/lib/design-document";
+ import { commitHistory, initialHistory, undoHistory, redoHistory, type DesignHistory } from "@/lib/design-history";
+ 
+@@ -17,6 +18,7 @@ async function api(url:string,body?:unknown,method="POST"){
+ const download=(blob:Blob,name:string)=>{const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+ 
+ export default function EditorPage(){
++  const [brands,setBrands]=useState<BrandKit[]>([]),[brandId,setBrandId]=useState(0);
+   const [saved,setSaved]=useState<Saved[]>([]),[photos,setPhotos]=useState<Photo[]>([]),[photoId,setPhotoId]=useState(0);
+   const [id,setId]=useState(0),[revision,setRevision]=useState(1),[history,setHistory]=useState<DesignHistory|null>(null);
+   const [selected,setSelected]=useState<string|null>(null),[savedJson,setSavedJson]=useState("");
+@@ -26,7 +28,8 @@ export default function EditorPage(){
+   const doc=history?.present??null,layer=doc?.layers.find(l=>l.id===selected),dirty=doc?JSON.stringify(doc)!==savedJson:false;
+   const assetUrl=useCallback((asset:string)=>`/api/design-assets?design_id=${id}&asset_id=${asset}`,[id]);
+   const refresh=useCallback(async()=>{
+-    const [list,images]=await Promise.all([api('/api/designs'),api('/api/images')]);
++    const [list,images,kits]=await Promise.all([api('/api/designs'),api('/api/images'),api('/api/brand-kits')]);
++    setBrands(kits.kits);setBrandId(current=>current||kits.kits.find((k:BrandKit)=>k.is_default)?.id||0);
+     setSaved(list.designs);setPhotos(images.images);setPhotoId(current=>current||images.images[0]?.id||0);
+   },[]);
+   function accept(data:{id:number;doc:DesignDocument;revision:number}){
+@@ -60,6 +63,7 @@ export default function EditorPage(){
+   async function createDesign(){if(dirty&&!confirm('Buat dokumen baru dan lepaskan perubahan yang belum disimpan?'))return;setBusy(true);setError("");try{accept(await api('/api/designs',{format:newFormat}));await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   async function save(){if(!doc||busy)return;setBusy(true);setError("");try{const result=await api('/api/designs',{id,revision,doc},'PATCH');setRevision(result.revision);setSavedJson(JSON.stringify(doc));setNotice('Perubahan tersimpan.');await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   async function copyDesign(){if(!doc||busy)return;setBusy(true);setError("");try{accept(await api('/api/designs',{copy_id:id,doc}));setNotice('Salinan dokumen tersimpan; dokumen sebelumnya tetap tersedia.');await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
++  async function applyBrand(){if(!doc||!brandId||busy)return;setBusy(true);setError("");try{const result=await api('/api/design-brand',{design_id:id,revision,doc,brand_kit_id:brandId});commit(result.doc);setNotice('Brand diterapkan. Periksa susunan dan klik Simpan untuk menyimpan perubahan.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   async function removeDesign(){if(!id||!confirm('Hapus dokumen editor ini? Poster asal tetap tersedia.'))return;setBusy(true);setError("");try{await api(`/api/designs?id=${id}`,{},'DELETE');setHistory(null);setId(0);setSavedJson('');setSelected(null);await refresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+   function add(kind:'text'|'rect'|'ellipse'){
+     if(!doc)return;if(doc.layers.length>=400){setError('Maksimal 400 layer. Hapus layer sebelum menambah elemen.');return;}const added=constrainLayer(newLayer(kind,kind==='ellipse'?{name:'Lingkaran',width:180,height:180,fill:'#facc15'}:kind==='rect'?{name:'Bidang',fill:'#dc2626'}:{}),doc.width,doc.height);
+@@ -161,6 +165,7 @@ export default function EditorPage(){
+         <button onClick={()=>void exportFile('jpg')} className={button}>Unduh JPG</button><button onClick={()=>void exportFile('svg')} className={button}>Unduh SVG</button>
+         <button onClick={copyDesign} className={button}>Salin dokumen</button>
+         <button onClick={removeDesign} className={button+' text-rose-600'}>Hapus dokumen</button>
++        <select aria-label="Brand Kit editor" value={brandId} onChange={e=>setBrandId(Number(e.target.value))} className="max-w-48 rounded-lg border p-2 text-xs"><option value={0}>Pilih Brand Kit</option>{brands.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}</select><button disabled={!brandId} onClick={applyBrand} className={button}>Terapkan Brand Kit</button>
+         <span className="text-xs text-slate-500">#{id} · revisi {revision} · {dirty?'Belum disimpan':'Tersimpan'}</span>
+       </div>
+       <div className="grid gap-4 xl:grid-cols-[200px_minmax(0,1fr)_260px]">
+diff --git a/app/promo/page.tsx b/app/promo/page.tsx
+index 7667335..b4b7965 100644
+--- a/app/promo/page.tsx
++++ b/app/promo/page.tsx
+@@ -3,6 +3,7 @@
+ 
+ import Link from "next/link";
+ import { useRouter } from "next/navigation";
++import type { BrandKit } from "@/lib/brand-options";
+ import type { ImageVariant } from "@/lib/image-processing-options";
+ import { useCallback, useEffect, useState } from "react";
+ import { Loader2, Wand2, Download, Trash2, AlertCircle, X, Shuffle } from "lucide-react";
+@@ -27,6 +28,9 @@ const inputCls =
+ 
+ export default function PromoPage() {
+   const router = useRouter();
++  const [brandLoading,setBrandLoading] = useState(true);
++  const [brands, setBrands] = useState<BrandKit[]>([]);
++  const [brandId, setBrandId] = useState(0);
+   const [images, setImages] = useState<Img[]>([]);
+   const [variants, setVariants] = useState<Record<number, ImageVariant[]>>({});
+   const [sel, setSel] = useState<Sel[]>([]);
+@@ -85,7 +89,14 @@ export default function PromoPage() {
+       } catch {
+         setError("Gagal memuat daftar gambar.");
+       }
++      try {
++        const response = await fetch('/api/brand-kits', {cache:'no-store'}), data = await response.json();
++        if (!response.ok) throw new Error(data.error || 'Gagal memuat Brand Kit.');
++        setBrands(data.kits);const kit = data.kits.find((k:BrandKit)=>k.is_default);
++        if(kit){setBrandId(kit.id);setFormat(kit.promo_format);setStyle(kit.promo_style);setTitle(kit.promo_title);setBadge(kit.promo_badge);setFooter(kit.footer_text);}
++      } catch(e) { setError((e as Error).message); }
+       await loadDesigns();
++      setBrandLoading(false);
+     })();
+   }, [loadDesigns]);
+ 
+@@ -144,6 +155,7 @@ export default function PromoPage() {
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
+           count,
++          brand_kit_id: brandId,
+           promo_type: type,
+           discount_percent: percent,
+           discount_amount: amount,
+@@ -274,7 +286,7 @@ export default function PromoPage() {
+       )}
+ 
+       {notice && <p role="status" className="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-800">{notice}</p>}
+-      <fieldset disabled={busy} className="min-w-0 border-0 p-0">
++      <fieldset disabled={busy||brandLoading} className="min-w-0 border-0 p-0">
+       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+         <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+           <h2 className="mb-3 text-sm font-semibold text-slate-900">
+@@ -478,6 +490,14 @@ export default function PromoPage() {
+ 
+           <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+             <h2 className="text-sm font-semibold text-slate-900">4. Teks dan tampilan</h2>
++            <label className="block text-sm">Brand Kit
++              <select aria-label="Brand Kit" value={brandId} onChange={e=>{
++                const id=Number(e.target.value);setBrandId(id);const kit=brands.find(k=>k.id===id);
++                if(kit){setFooter(kit.footer_text);setStyle(kit.promo_style);setFormat(kit.promo_format);setTitle(kit.promo_title);setBadge(kit.promo_badge);}
++              }} className={inputCls}><option value={0}>Tanpa Brand Kit</option>{brands.map(k=><option key={k.id} value={k.id}>{k.name}{k.is_default?' (default)':''}</option>)}</select>
++            </label>
++            {brandId>0&&<p className="text-xs text-slate-500">Warna, font, dan logo diambil dari Brand Kit. Judul, footer, konsep, dan ukuran masih bisa Anda ubah untuk promo ini.</p>}
++
+             <fieldset>
+               <legend className="mb-2 text-xs font-medium text-slate-500">Konsep desain</legend>
+               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+@@ -537,6 +557,7 @@ export default function PromoPage() {
+                     <button
+                       key={t.id}
+                       title={t.label}
++                      disabled={brandId>0}
+                       onClick={() => setTheme(t.id)}
+                       style={{ background: t.bg }}
+                       className={`h-9 w-9 rounded-full ring-2 ring-offset-2 transition ${
+diff --git a/components/Sidebar.tsx b/components/Sidebar.tsx
+index ee00ab5..fb132f7 100644
+--- a/components/Sidebar.tsx
++++ b/components/Sidebar.tsx
+@@ -9,6 +9,7 @@ import {
+   ScanSearch,
+   ImagePlus,
+   PenTool,
++  Palette,
+   Sparkles,
+   Megaphone,
+   Library,
+@@ -43,6 +44,7 @@ const GROUPS: { title: string | null; items: Item[] }[] = [
+     items: [
+       { href: "/library", label: "Content Library", icon: Library },
+       { href: "/history", label: "History", icon: History },
++      { href: "/brand-kit", label: "Brand Kit", icon: Palette },
+       { href: "/settings", label: "Settings", icon: Settings },
+     ],
+   },
+diff --git a/docs/FASE-7-BRAND-KIT-CONTENT-STUDIO.md b/docs/FASE-7-BRAND-KIT-CONTENT-STUDIO.md
+new file mode 100644
+index 0000000..bfb35f8
+--- /dev/null
++++ b/docs/FASE-7-BRAND-KIT-CONTENT-STUDIO.md
+@@ -0,0 +1,109 @@
++# Fase 7 — Brand Kit dan Content Studio
++
++Baseline Fase 6: `abbc33c`. Dikerjakan 1 November 2026.
++
++## Brand Kit
++
++Buka menu **Brand Kit**, buat kit baru, isi nama, upload logo bila tersedia, lalu atur:
++
++- Warna utama, sekunder, dan aksen.
++- Font lokal utama dan footer/kontak.
++- Panduan gaya bahasa (maksimal 600 karakter).
++- Konsep, ukuran, judul dan badge awal untuk promosi.
++- Gaya bahasa serta bahasa konten awal.
++- Kit default untuk pemakaian berikutnya.
++
++Klik **Simpan Brand Kit**. Kit tidak memerlukan logo agar dapat digunakan. Logo PNG transparan dianjurkan untuk komposisi; JPG/WEBP juga diterima melalui upload yang sudah ada. Tidak ada pembuatan logo palsu/otomatis.
++
++Pengaturan disimpan lokal dengan revisi. Menjadikan kit lain sebagai default hanya menyisakan satu default dan memperbarui revisi kit terdahulu. Tab yang membawa revisi lama diminta memuat ulang. Kit dapat dihapus tanpa menghapus poster, caption, atau template yang telah dibuat.
++
++## Promo Composer
++
++Kit default dimuat sebelum formulir aktif. Memilih kit lain mengisi pengaturan awal judul, badge, footer, konsep dan ukuran; pengguna masih dapat mengubah nilai tersebut untuk promo ini. Pilih **Tanpa Brand Kit** untuk memakai perilaku warna tema lama. Saat kit aktif, warna dari kit dipakai dan tombol warna tema dinonaktifkan.
++
++Renderer memakai palette dan font kit. Logo ditempatkan proporsional pada area footer, dengan bidang putih di belakangnya agar kemasan dan harga tidak tertutup. Area footer tetap disediakan jika ada logo meskipun footer teks kosong. Warna tulisan pada harga/tag/header/footer disesuaikan bila palette tidak cukup kontras. Nuansa latar netral/dingin pada konsep tertentu tetap dipertahankan; warna brand digunakan pada elemen utama dan footer.
++
++Setiap hasil menyimpan snapshot identitas brand dalam metadata dan pengaturan regenerasi. **Mengubah/menghapus kit tidak mengganti brand pada poster lama atau saat membuat ulang hasil tersebut.** Hasil tanpa brand dari sebelum Fase 7 tetap tanpa brand saat dibuat ulang, meskipun sekarang ada kit default.
++
++File logo versi terdahulu dipertahankan dalam `storage/uploads/brand-assets/` untuk menjaga snapshot. Melepas logo dari kit menghentikan pemakaian pada hasil baru, bukan menghapus file yang masih mungkin dipakai hasil lama. Backup seluruh storage; penghapusan file manual dapat menyebabkan regenerasi meminta logo dipulihkan.
++
++## Design Editor dan template
++
++Di editor, pilih **Brand Kit editor**, lalu **Terapkan Brand Kit**. Tindakan ini:
++
++- Memakai font dan warna kit pada teks/bentuk tanpa mengganti isi nama atau nominal harga.
++- Mengganti background bitmap bernama Background menjadi bidang warna utama.
++- Mengganti footer/logo brand dengan komponen baru yang terpisah.
++- Menjaga foto produk dan salinan aset aslinya.
++
++Periksa susunan, lalu klik **Simpan**. Penerapan tetap merupakan perubahan draft dan dapat di-undo. Ia tidak otomatis menulis dokumen. Footer berada di bagian bawah canvas; pada desain manual yang sudah memakai area tersebut, pengguna dapat menggeser/mengedit layer setelah penerapan. Tidak ada jaminan auto-layout ulang seluruh susunan manual.
++
++Di Brand Kit, pilih dokumen editor yang sudah tersimpan dan **Simpan template untuk brand ini**. Template mengambil **tampilan dokumen yang dipilih**, bukan otomatis mengubahnya mengikuti warna kit. Karena itu, terapkan kit di editor dan simpan dokumen terlebih dahulu jika dibutuhkan.
++
++Template menyimpan salinan dokumen dan aset. **Gunakan template** membuat dokumen editor baru dengan ID aset baru. Menghapus dokumen asal atau kit tidak merusak template; template dari kit yang telah dihapus tetap tercantum tanpa afiliasi brand. Menghapus template tidak menghapus dokumen yang sudah dibuat darinya. Template disembunyikan dari daftar dokumen biasa agar salinan penyimpanan tidak memenuhi daftar editor.
++
++## Content Studio
++
++Jenis konten yang tersedia sekarang:
++
++- Caption Instagram/Facebook, headline, hashtag, deskripsi dan kalimat promosi.
++- Call to Action, copywriting promosi, konten edukasi produk.
++- Ide konten dan alternatif gaya bahasa yang sudah ada.
++
++Gaya tambahan: **Friendly, Hard Selling, Soft Selling**. Gaya Profesional, Santai, Persuasif, Promosi, Informatif, dan Kreatif tetap didukung. Bahasa hasil dapat dipilih **Indonesia/English**. Tanpa kit, UI mengikuti bahasa default di Settings; memilih kit mengisi bahasa/gaya awal yang masih dapat diubah pengguna.
++
++Dua sumber fakta didukung:
++
++1. Hasil analisis gambar yang dapat diperbaiki sebelum membuat konten.
++2. Fakta produk manual, tanpa harus menjalankan model vision. Isi deskripsi minimal 3 karakter dan hanya informasi yang diketahui. Foto tetap dipilih sebagai sumber penyimpanan konten.
++
++Konten baru menyimpan fakta, info tambahan, bahasa, gaya dan snapshot brand. **Buat ulang** pada konten baru memakai snapshot tersebut, bukan data formulir yang kebetulan sudah berubah. Konten lama yang belum memiliki snapshot masih dapat dibuka, diedit, disimpan, disalin, dan diunduh; tombol buat ulangnya memakai formulir yang sedang aktif.
++
++Simpan ke Content Library, salin clipboard dan unduhan TXT tetap tersedia. Label brand dan bahasa ditampilkan pada hasil baru. Melepas tanda simpan tidak menghapus isi.
++
++## Batas fakta dan ketergantungan AI
++
++Pembuatan teks tetap memanggil **Ollama yang dipasang pengguna**, bukan generator placeholder. Model teks harus tersedia di Settings dan Ollama harus berjalan. Model vision tidak diperlukan untuk alur fakta manual. Kegagalan koneksi/model atau respons kosong menampilkan error dan tidak menyimpan konten palsu.
++
++Prompt meminta hanya menggunakan fakta yang diberikan, tidak mengarang komposisi, sertifikasi, manfaat kesehatan, cara penyimpanan/memasak, deadline atau kelangkaan stok. Panduan gaya brand diberi konteks terpisah agar tidak dijadikan fakta produk.
++
++Filter harga membandingkan nominal rupiah yang diberikan secara eksplisit menggunakan Rp/IDR pada info tambahan (serta fakta manual bila digunakan). Format Rp25rb/Rp25.000 dipahami sebagai nominal yang sama. Angka berat dan telepon tidak dijadikan izin menyebut harga. Nominal output yang tidak diizinkan diganti **[isi harga]**. Tanda baca setelah harga ditangani tanpa membiarkan harga rekaan terlewat.
++
++Filter ini **bukan verifikasi otomatis seluruh klaim produk**. Bahasa dan akurasi teks bergantung pada model; periksa hasil sebelum digunakan. Tidak ada klaim bahwa model selalu mematuhi setiap instruksi.
++
++## Data dan kompatibilitas
++
++Schema ditambah secara non-destruktif: `brand_profiles`, `brand_assets`, `brand_templates`, dan `content_context`. Tabel kit yang sudah disiapkan sebelumnya dipakai kembali. Restart server setelah pembaruan diperlukan agar tabel baru diinisialisasi.
++
++Logo kit disalin dari foto upload, sehingga menghapus foto upload logo tidak menghapus logo versi tersimpan. Aset editor/template tetap mengikuti kepemilikan dokumen dan menolak pemakaian aset dokumen lain. Snapshot konten tidak dihapus bersama kit. `AUTOFEEDS_DATA_DIR` tetap didukung; backup database dan storage ketika server berhenti.
++
++Kit dan template ditampilkan hingga 100 template/dokumen terbaru pada daftar yang sesuai; pagination belum ditambahkan. Logo lama yang disimpan demi riwayat tidak dibersihkan otomatis. Font memakai daftar lokal yang tersedia; jika font tidak tersedia di OS, renderer/editor memakai fallback, sehingga tipografi dapat berbeda antarperangkat.
++
++## Validasi sesi implementasi
++
++- TypeScript, ESLint tanpa error/warning, production build.
++- **24 tes Node**, termasuk validasi kit/snapshot, penerapan brand tanpa mengubah foto/harga, penggantian footer/logo tanpa duplikasi, kontras, prompt bahasa/brand, serta filter harga/satuan/telepon/tanda baca.
++- **19 tes Python dengan model CPU nyata untuk regresi foto**: semua regresi sebelumnya, serta 24 render bermerek (6 konsep × 4 format) dengan logo, palette, footer, layer dan integritas sumber. Total render yang diuji pada suite saat ini: 170, termasuk konversi dan perbandingan recorder.
++- API Fase 7: CRUD/revisi/default kit, logo tetap tersedia setelah sumber dihapus, snapshot poster/konten setelah perubahan dan penghapusan kit, editor, template mandiri, sumber fakta manual dan analisis, bahasa, harga, respons kosong/error, serta persistence setelah restart.
++- Browser Chromium Linux: edit/simpan kit, kit default di Composer, gunakan template, terapkan brand di editor tanpa mengganti harga, input fakta manual di Content Studio, bahasa/CTA, simpan ke Library, unduh TXT, dan pemeriksaan viewport desktop/HP.
++- API Fase 4–5 dan API/browser Fase 6 dijalankan kembali dan lolos.
++
++**Pengujian teks menggunakan server HTTP fixture yang meniru protokol Ollama** untuk menguji permintaan, snapshot, filter dan error handling. Itu tidak membuktikan kualitas jawaban model bahasa nyata. Foto AI pada regresi Fase 4 memakai model CPU lokal yang benar-benar dijalankan. Uji Windows/AMD dan HP fisik pengguna belum dilakukan.
++
++```bash
++npx tsc --noEmit
++npm run lint
++npm run build
++node --test tests/*.test.mjs
++python -m unittest discover -s tests -p "test_*.py"
++node tests/smoke-phase4.mjs
++node tests/smoke-phase5.mjs
++node tests/smoke-phase6.mjs
++node tests/smoke-phase7.mjs
++```
++
++Aktifkan `RUN_LOCAL_AI_TESTS=1` bila model foto lokal tersedia. Smoke test Fase 7 memakai data sementara terisolasi dan port 3067; server fixture Ollama menggunakan port kosong yang dipilih otomatis. Uji browser opsional memerlukan Playwright serta Chromium: `PHASE7_UI=1` dan `PHASE7_CHROMIUM` atau modul browser portable pada lingkungan pengujian. Keduanya tidak menjadi dependensi aplikasi pengguna.
++
++## Berikutnya
++
++Fase 8: ekspor PNG/JPG, custom size, dan pemeriksaan akhir lintas workflow. Tidak ada publikasi otomatis ke media sosial, sinkronisasi brand eksternal, atau layanan AI berbayar baru pada Fase 7.
+diff --git a/lib/brand-document.ts b/lib/brand-document.ts
+new file mode 100644
+index 0000000..0bc4f31
+--- /dev/null
++++ b/lib/brand-document.ts
+@@ -0,0 +1,33 @@
++import {constrainLayer,newLayer,type DesignDocument,type DesignLayer} from "./design-document";
++import type {BrandSnapshot} from "./brand-options";
++export function readableInk(color:string){
++ const values=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);
++ return values[0]*.2126+values[1]*.7152+values[2]*.0722>.179?'#0f172a':'#ffffff';
++}
++export function applyBrandDocument(doc:DesignDocument,brand:BrandSnapshot,logo?:{id:string;width:number;height:number}):DesignDocument{
++ const layers:DesignLayer[]=doc.layers.filter(l=>l.brandRole!=='logo'&&l.brandRole!=='footer').map((l):DesignLayer=>{
++  if(l.kind==='image')return l.name==='Background'?{...l,kind:'rect',fill:brand.primary_color,stroke:'none',radius:0}:l;
++  if(l.kind==='text'){
++   const text=l.text??'',bodyInk=readableInk(brand.secondary_color)==='#ffffff'?brand.secondary_color:'#0f172a';
++   const fill=l.fill.toLowerCase()==='#64748b'?l.fill:/^-\d+%$/.test(text)?readableInk(brand.accent_color):/^Rp|^IDR|PROMO|BELI|GRATIS|HEMAT/.test(text)||(l.y<doc.height*.2&&l.width>doc.width*.55)?readableInk(brand.primary_color):bodyInk;
++   return {...l,fontFamily:brand.font_family,fill};
++  }
++  if(l.kind==='rect'&&l.name==='Background')return {...l,fill:brand.primary_color};
++  if(l.kind==='ellipse')return {...l,fill:brand.accent_color};
++  if(l.kind==='rect'&&l.fill.toLowerCase().startsWith('#ffffff'))return l;
++  return {...l,fill:l.fill==='none'?'none':brand.primary_color,stroke:l.stroke==='none'?'none':brand.primary_color};
++ });
++ if(brand.footer_text||logo){
++  const h=Math.max(64,Math.round(doc.height*.075)),margin=Math.round(doc.width*.04),top=doc.height-h;
++  layers.push(newLayer('rect',{name:'Footer brand',brandRole:'footer',x:0,y:top,width:doc.width,height:h,fill:brand.secondary_color,radius:0}));
++  let tx=margin;
++  if(logo){
++   const boxW=h*1.5,boxH=h*.72,scale=Math.min(boxW/logo.width,boxH/logo.height),w=logo.width*scale,height=logo.height*scale;
++   layers.push(newLayer('rect',{name:'Latar logo',brandRole:'logo',x:margin-4,y:top+(h-boxH)/2-4,width:boxW+8,height:boxH+8,fill:'#ffffff',radius:8}));
++   layers.push(newLayer('image',{name:'Logo brand',brandRole:'logo',assetId:logo.id,x:margin+(boxW-w)/2,y:top+(h-height)/2,width:w,height}));tx=margin+boxW+margin/2;
++  }
++  if(brand.footer_text)layers.push(newLayer('text',{name:'Footer brand',brandRole:'footer',text:brand.footer_text,fontFamily:brand.font_family,fontSize:Math.min(42,h*.4),baseline:.8,x:tx,y:top+h*.25,width:doc.width-margin-tx,height:h*.5,fill:readableInk(brand.secondary_color)}));
++ }
++ if(layers.length>400)throw new Error('Penerapan brand melebihi batas 400 layer. Hapus beberapa layer terlebih dahulu.');
++ return {...doc,layers:layers.map(l=>constrainLayer(l,doc.width,doc.height))};
++}
+diff --git a/lib/brand-options.ts b/lib/brand-options.ts
+new file mode 100644
+index 0000000..1709681
+--- /dev/null
++++ b/lib/brand-options.ts
+@@ -0,0 +1,25 @@
++export const BRAND_FONTS=["Arial","Impact","Georgia","Verdana","Courier New","DejaVu Sans"] as const;
++export const BRAND_DEFAULTS={name:"",primary_color:"#dc2626",secondary_color:"#1e293b",accent_color:"#facc15",font_family:"Arial",footer_text:"",voice:"",promo_style:"retail",promo_format:"feed",promo_title:"PROMO SPESIAL",promo_badge:"PROMO",tone:"profesional",language:"id",is_default:false};
++export type BrandFields=typeof BRAND_DEFAULTS;
++export type BrandKit=BrandFields&{id:number;revision:number;logo_asset_id:string|null};
++export type BrandSnapshot=BrandKit;
++const STYLES=["premium","flash","frozen","editorial","retail","spotlight"],FORMATS=["feed","square","story","landscape"];
++const TONES=["profesional","santai","persuasif","promosi","informatif","kreatif","friendly","hard_selling","soft_selling"];
++export function validateBrand(value:unknown):BrandFields{
++ if(!value||typeof value!=="object"||Array.isArray(value))throw new Error("Brand Kit tidak valid.");
++ const raw=value as Record<string,unknown>,out={...BRAND_DEFAULTS};
++ const limits={name:100,footer_text:80,voice:600,promo_title:40,promo_badge:16} as const;
++ for(const key of Object.keys(limits) as (keyof typeof limits)[]){const v=raw[key]??out[key];if(typeof v!=="string"||v.length>limits[key])throw new Error(`Isi ${key} terlalu panjang/tidak valid.`);out[key]=v.trim();}
++ if(!out.name)throw new Error("Nama brand wajib diisi.");
++ for(const key of ["primary_color","secondary_color","accent_color"] as const){const v=raw[key]??out[key];if(typeof v!=="string"||!/^#[0-9a-fA-F]{6}$/.test(v))throw new Error("Warna brand harus HEX enam digit.");out[key]=v;}
++ const choices={font_family:BRAND_FONTS,promo_style:STYLES,promo_format:FORMATS,tone:TONES,language:["id","en"]} as const;
++ for(const key of Object.keys(choices) as (keyof typeof choices)[]){const v=raw[key]??out[key];if(typeof v!=="string"||!(choices[key] as readonly string[]).includes(v))throw new Error(`Pilihan ${key} tidak valid.`);out[key]=v;}
++ if(raw.is_default!==undefined&&typeof raw.is_default!=="boolean")throw new Error("Status default tidak valid.");out.is_default=(raw.is_default??false) as boolean;return out;
++}
++export function validateBrandSnapshot(raw:unknown):BrandSnapshot|null{
++ if(raw==null)return null;
++ const fields=validateBrand(raw),v=raw as Record<string,unknown>;
++ if(!Number.isSafeInteger(v.id)||Number(v.id)<=0||!Number.isSafeInteger(v.revision)||Number(v.revision)<1)throw new Error("Snapshot brand tidak valid.");
++ if(v.logo_asset_id!==null&&(typeof v.logo_asset_id!=="string"||!/^[0-9a-f-]{36}$/.test(v.logo_asset_id)))throw new Error("Logo tidak valid.");
++ return {...fields,id:Number(v.id),revision:Number(v.revision),logo_asset_id:v.logo_asset_id as string|null};
++}
+diff --git a/lib/brands.ts b/lib/brands.ts
+new file mode 100644
+index 0000000..ab8c196
+--- /dev/null
++++ b/lib/brands.ts
+@@ -0,0 +1,31 @@
++import fs from "node:fs";
++import path from "node:path";
++import { getDb } from "./db";
++import { UPLOAD_DIR } from "./storage";
++import { copyEditorAsset, designAssetPath } from "./design-storage";
++import { BRAND_DEFAULTS, validateBrandSnapshot, type BrandKit, type BrandSnapshot } from "./brand-options";
++export const BRAND_ASSET_DIR=path.join(UPLOAD_DIR,"brand-assets");
++export const brandAssetPath=(id:string)=>/^[0-9a-f-]{36}$/.test(id)?path.join(BRAND_ASSET_DIR,`${id}.png`):null;
++export function listBrands():BrandKit[]{
++ const rows=getDb().prepare(`SELECT b.*,COALESCE(p.revision,1) AS revision,p.options_json FROM brand_kits b LEFT JOIN brand_profiles p ON p.brand_id=b.id ORDER BY b.is_default DESC,b.id DESC`).all() as Record<string,unknown>[];
++ return rows.map(row=>({...BRAND_DEFAULTS,...(row.options_json?JSON.parse(String(row.options_json)):{}),id:Number(row.id),revision:Number(row.revision),name:String(row.name),primary_color:String(row.primary_color),secondary_color:String(row.secondary_color),accent_color:String(row.accent_color),font_family:String(row.font_family),footer_text:String(row.footer_text??""),is_default:row.is_default===1,logo_asset_id:row.logo_filename?String(row.logo_filename).replace(/\.png$/,''):null}));
++}
++export function selectedBrand(value:unknown):BrandSnapshot|null{
++ if(value===0||value===null)return null;
++ const kits=listBrands();
++ if(value===undefined)return kits.find(k=>k.is_default)??null;
++ const id=Number(value);if(!Number.isSafeInteger(id)||id<=0)throw new Error("ID Brand Kit tidak valid.");
++ const kit=kits.find(k=>k.id===id);if(!kit)throw new Error("Brand Kit tidak ditemukan.");return validateBrandSnapshot(kit);
++}
++export async function copyBrandLogo(imageId:number){
++ const asset=await copyEditorAsset(imageId);fs.mkdirSync(BRAND_ASSET_DIR,{recursive:true});
++ const destination=brandAssetPath(asset.id)!;
++ try{fs.renameSync(designAssetPath(asset.id)!,destination);return asset;}
++ catch(e){fs.rmSync(designAssetPath(asset.id)!,{force:true});throw e;}
++}
++export function rendererBrand(snapshot:BrandSnapshot|null){
++ if(!snapshot)return undefined;
++ const logo=snapshot.logo_asset_id?brandAssetPath(snapshot.logo_asset_id):null;
++ if(logo&&!fs.existsSync(logo))throw new Error("Logo brand tersimpan tidak ditemukan.");
++ return {name:snapshot.name,primary_color:snapshot.primary_color,secondary_color:snapshot.secondary_color,accent_color:snapshot.accent_color,font_family:snapshot.font_family,logo_path:logo};
++}
+diff --git a/lib/content.ts b/lib/content.ts
+index 96e011a..2a22d73 100644
+--- a/lib/content.ts
++++ b/lib/content.ts
+@@ -1,4 +1,7 @@
+ export const CONTENT_TYPES = [
++  { id: "cta", label: "Call to Action" },
++  { id: "copywriting", label: "Copywriting Promosi" },
++  { id: "education", label: "Konten Edukasi Produk" },
+   { id: "caption_instagram", label: "Caption Instagram" },
+   { id: "caption_facebook", label: "Caption Facebook" },
+   { id: "hashtag", label: "Hashtag" },
+@@ -10,6 +13,9 @@ export const CONTENT_TYPES = [
+ ] as const;
+ 
+ export const TONES = [
++  { id: "friendly", label: "Friendly" },
++  { id: "hard_selling", label: "Hard Selling" },
++  { id: "soft_selling", label: "Soft Selling" },
+   { id: "profesional", label: "Profesional" },
+   { id: "santai", label: "Santai" },
+   { id: "persuasif", label: "Persuasif" },
+@@ -26,6 +32,9 @@ export function isTone(v: string): boolean {
+ }
+ 
+ const TYPE_INSTRUCTIONS: Record<string, string> = {
++  cta: "Tulis 5 call to action singkat dan relevan, tanpa klaim kelangkaan stok atau deadline yang tidak diberikan.",
++  copywriting: "Tulis satu copywriting promosi: headline, fakta produk, alasan membeli yang didukung data, dan call to action.",
++  education: "Tulis konten edukasi singkat dari fakta produk yang tersedia. Jika informasi tidak cukup, jelaskan pertanyaan yang perlu dikonfirmasi; jangan menciptakan petunjuk penyimpanan, suhu, cara masak, komposisi, atau klaim kesehatan.",
+   caption_instagram:
+     "Tulis 1 caption Instagram: kalimat pembuka yang menarik, isi 2-4 kalimat, ajakan bertindak di akhir, emoji secukupnya. Di baris terakhir tambahkan 5-8 hashtag.",
+   caption_facebook:
+@@ -35,7 +44,7 @@ const TYPE_INSTRUCTIONS: Record<string, string> = {
+   headline:
+     "Tulis 5 alternatif headline promosi, masing-masing maksimal 10 kata, dalam daftar bernomor.",
+   description:
+-    "Tulis 1 deskripsi produk berupa satu paragraf (3-5 kalimat) yang menjelaskan tampilan dan manfaat berdasarkan data yang tersedia saja.",
++    "Tulis 1 deskripsi produk berupa satu paragraf (3-5 kalimat) yang menjelaskan tampilan dan fakta yang tersedia saja; manfaat hanya jika diberikan pemilik produk.",
+   promo:
+     "Tulis 5 kalimat promosi singkat (maksimal 20 kata), dalam daftar bernomor.",
+   ideas:
+@@ -53,6 +62,8 @@ export type PromptInput = {
+   visibleText: string;
+   context: string;
+   extra: string;
++  language?: "id" | "en";
++  brand?: { name: string; voice: string; footer_text: string } | null;
+ };
+ 
+ export function buildPrompt(i: PromptInput): string {
+@@ -66,33 +77,45 @@ export function buildPrompt(i: PromptInput): string {
+   ];
+   if (i.extra.trim()) lines.push(`Info tambahan dari pemilik produk: ${i.extra.trim()}`);
+ 
+-  return `Kamu adalah penulis konten media sosial berbahasa Indonesia.
++  const language=i.language==='en'?'English':'Bahasa Indonesia';
++  const brand=i.brand?`\nIDENTITAS BRAND (gaya dan kontak, bukan sumber klaim produk):\nNama: ${i.brand.name}\nPanduan gaya: ${i.brand.voice || '-'}\nFooter/kontak yang diberikan pemilik: ${i.brand.footer_text || '-'}\n`:'';
++  return `Kamu adalah penulis konten media sosial. Bahasa keluaran wajib: ${language}.
+ 
+ DATA PRODUK:
+ ${lines.join("\n")}
+ 
++${brand}
+ TUGAS:
+ ${TYPE_INSTRUCTIONS[i.type] ?? TYPE_INSTRUCTIONS.caption_instagram}
+ 
+ Gaya bahasa: ${toneLabel}.
+ 
+ ATURAN WAJIB:
+-- Tulis dalam Bahasa Indonesia.
++- Tulis dalam ${language}.
+ - Hanya gunakan fakta dari DATA PRODUK di atas.
+-- Jangan mengarang nama merek, harga, ukuran, diskon, bahan, atau klaim kesehatan yang tidak tertulis di data.
+-- Harga, promo, dan kontak hanya boleh disebut jika ada di "Info tambahan".
++- Jangan mengarang nama merek, harga, ukuran, diskon, bahan, sertifikasi, komposisi, manfaat, atau klaim kesehatan yang tidak tertulis di data.
++- Harga dan promo hanya boleh disebut jika diberikan secara eksplisit oleh pemilik. Kontak hanya dari Info tambahan atau footer brand.
++- Panduan gaya tidak boleh menambah fakta, klaim sertifikasi, komposisi, atau manfaat produk.
++- Jangan membuat urgensi stok/deadline palsu meskipun gaya hard selling.
+ - Tulis hasilnya langsung, tanpa kalimat pembuka seperti "Berikut adalah" dan tanpa penjelasan tambahan.`;
+ }
+-// Hapus harga yang tidak ditulis pengguna + sisa tanda markdown
+-export function cleanOutput(text: string, extra: string): string {
+-  const allowed = new Set(
+-    (extra.match(/\d[\d.,]*/g) ?? []).map((n) => n.replace(/\D/g, ""))
+-  );
+-  const priceRe = /Rp\.?\s?(\d[\d.,]*)(\s?(?:rb|ribu|k|jt|juta))?/gi;
+-  return text
+-    .replace(priceRe, (m, num: string) =>
+-      allowed.has(num.replace(/\D/g, "")) ? m : "[isi harga]"
+-    )
+-    .replace(/\*\*/g, "")
+-    .trim();
+-}
+\ No newline at end of file
++// Compare actual currency values; weights and telephone digits never authorize prices.
++const PRICE = /\b(?:Rp\.?|IDR)\s*(\d+(?:[.,]\d+)*)(?:\s*(rb|ribu|k|jt|juta))?(?![A-Za-z0-9]|[.,]\d)/gi;
++export function priceValue(number:string,suffix=''):number|null{
++  const unit=suffix.toLowerCase();let value:number;
++  if(unit){
++    if(!/^\d+(?:[.,]\d{1,3})?$/.test(number))return null;
++    value=Number(number.replace(',','.'))*(/^(jt|juta)$/.test(unit)?1_000_000:1000);
++  }else{
++    if(!/^(?:\d+|\d{1,3}(?:[.,]\d{3})+)$/.test(number))return null;
++    value=Number(number.replace(/[.,]/g,''));
++  }
++  return Number.isSafeInteger(value)&&value>0?value:null;
++}
++export function cleanOutput(text: string, authorizedFacts: string): string {
++  const allowed=new Set<number>();
++  for(const match of authorizedFacts.matchAll(new RegExp(PRICE.source,'gi'))){const value=priceValue(match[1],match[2]);if(value!==null)allowed.add(value);}
++  return text.replace(new RegExp(PRICE.source,'gi'),(whole,number:string,suffix:string)=>{
++    const value=priceValue(number,suffix);return value!==null&&allowed.has(value)?whole:'[isi harga]';
++  }).replace(/\*\*/g,'').trim().slice(0,10000);
++}
+diff --git a/lib/design-document.ts b/lib/design-document.ts
+index dae9c7b..86d3e50 100644
+--- a/lib/design-document.ts
++++ b/lib/design-document.ts
+@@ -10,6 +10,7 @@ export type DesignLayer = {
+   x: number; y: number; width: number; height: number; rotation: number; opacity: number;
+   visible: boolean; locked: boolean; fill: string; stroke: string; strokeWidth: number;
+   text?: string; fontFamily?: string; fontSize?: number; bold?: boolean; baseline?: number;
++  brandRole?: "footer" | "logo";
+   assetId?: string; radius?: number; d?: string; pathWidth?: number; pathHeight?: number;
+ };
+ export type DesignDocument = { version: 1; title: string; format: keyof typeof DESIGN_FORMATS; width: number; height: number; layers: DesignLayer[] };
+@@ -53,6 +54,7 @@ export function validateDocument(value: unknown): DesignDocument {
+       opacity: number(l.opacity, 0, 1), visible: l.visible, locked: l.locked,
+       fill: color(l.fill), stroke: color(l.stroke), strokeWidth: number(l.strokeWidth, 0, 100),
+     };
++    if (l.brandRole !== undefined) { if (!["footer","logo"].includes(String(l.brandRole))) throw new Error("Peran brand tidak valid."); layer.brandRole = l.brandRole as "footer" | "logo"; }
+     if (l.kind === "image") {
+       if (typeof l.assetId !== "string" || !/^[0-9a-f-]{36}$/.test(l.assetId)) throw new Error("Aset gambar tidak valid.");
+       layer.assetId = l.assetId;
+diff --git a/lib/design-storage.ts b/lib/design-storage.ts
+index 2fc61f3..08e65da 100644
+--- a/lib/design-storage.ts
++++ b/lib/design-storage.ts
+@@ -7,6 +7,8 @@ import { getDb } from "./db";
+ import { UPLOAD_DIR, resolveUploadPath } from "./storage";
+ import { processedPath } from "./image-processing";
+ import { constrainLayer, validateDocument, type DesignDocument } from "./design-document";
++import { rendererBrand } from "./brands";
++import { validateBrandSnapshot } from "./brand-options";
+ import type { PromoSpec, PromoSpecItem } from "./promo";
+ const run = promisify(execFile);
+ export const ASSET_DIR = path.join(UPLOAD_DIR, "design-assets");
+@@ -45,7 +47,7 @@ export async function tracePromo(promoId: number) {
+     path: imageSource(i.image_id, i.variant_id), name: i.name, price_text: i.price, old_text: i.old, tag: i.tag,
+   }));
+   const spec: PromoSpec = { format: row.layout_format, theme: row.theme, seed: row.seed, style: row.style,
+-    layout_variant: row.layout_variant, mode: request.promo_type === "bundling" ? "bundle" : "items",
++    layout_variant: row.layout_variant, brand: rendererBrand(validateBrandSnapshot(request.brand_snapshot)), mode: request.promo_type === "bundling" ? "bundle" : "items",
+     title: typeof request.title === "string" ? request.title : row.title, subtitle: request.subtitle || "", footer: request.footer || "", badge: request.badge || "", items, bundle: metadata.bundle };
+   fs.mkdirSync(ASSET_DIR, { recursive: true });
+   const folder = fs.mkdtempSync(path.join(ASSET_DIR, ".trace-"));
+@@ -68,3 +70,21 @@ export async function tracePromo(promoId: number) {
+     throw error;
+   } finally { fs.rmSync(folder,{recursive:true,force:true}); }
+ }
++
++export function cloneDocument(sourceId:number,input?:unknown){
++ const db=getDb(),row=db.prepare("SELECT d.doc_json FROM designs d JOIN design_revisions r ON r.design_id=d.id WHERE d.id=?").get(sourceId) as {doc_json:string}|undefined;
++ if(!row)throw new Error("Dokumen sumber tidak ditemukan.");
++ const doc=validateDocument(input??JSON.parse(row.doc_json)),assets:{id:string;width:number;height:number}[]=[],mapping=new Map<string,string>();
++ try{
++  for(const layer of doc.layers)if(layer.kind==='image'){
++   const old=layer.assetId!;
++   if(!mapping.has(old)){
++    const asset=db.prepare("SELECT width,height FROM design_assets WHERE id=? AND design_id=?").get(old,sourceId) as {width:number;height:number}|undefined;
++    const file=designAssetPath(old);if(!asset||!file||!fs.existsSync(file))throw new Error("Aset sumber hilang atau bukan milik dokumen.");
++    const id=crypto.randomUUID();fs.copyFileSync(file,designAssetPath(id)!,fs.constants.COPYFILE_EXCL);assets.push({id,...asset});mapping.set(old,id);
++   }
++   layer.assetId=mapping.get(old)!;
++  }
++  return {doc,assets};
++ }catch(e){for(const asset of assets)fs.rmSync(designAssetPath(asset.id)!,{force:true});throw e;}
++}
+diff --git a/lib/promo.ts b/lib/promo.ts
+index d3eb896..bfc0502 100644
+--- a/lib/promo.ts
++++ b/lib/promo.ts
+@@ -27,6 +27,7 @@ export type PromoSpec = {
+   seed: number;
+   style?: string;
+   layout_variant?: number;
++  brand?: { name: string; primary_color: string; secondary_color: string; accent_color: string; font_family: string; logo_path: string | null };
+   mode: "items" | "bundle";
+   title: string;
+   subtitle: string;
+diff --git a/lib/schema.ts b/lib/schema.ts
+index 9717e12..ff670a7 100644
+--- a/lib/schema.ts
++++ b/lib/schema.ts
+@@ -133,6 +133,28 @@ CREATE TABLE IF NOT EXISTS brand_kits (
+   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
++CREATE TABLE IF NOT EXISTS brand_profiles (
++  brand_id INTEGER PRIMARY KEY REFERENCES brand_kits(id) ON DELETE CASCADE,
++  revision INTEGER NOT NULL DEFAULT 1,
++  options_json TEXT NOT NULL
++);
++CREATE TABLE IF NOT EXISTS brand_assets (
++  id TEXT PRIMARY KEY,
++  width INTEGER NOT NULL,
++  height INTEGER NOT NULL
++);
++CREATE TABLE IF NOT EXISTS brand_templates (
++  design_id INTEGER PRIMARY KEY REFERENCES designs(id) ON DELETE CASCADE,
++  brand_id INTEGER REFERENCES brand_kits(id) ON DELETE SET NULL,
++  name TEXT NOT NULL,
++  created_at TEXT NOT NULL DEFAULT (datetime('now'))
++);
++CREATE TABLE IF NOT EXISTS content_context (
++  content_id INTEGER PRIMARY KEY REFERENCES generated_contents(id) ON DELETE CASCADE,
++  language TEXT NOT NULL,
++  snapshot_json TEXT NOT NULL,
++  parent_content_id INTEGER REFERENCES generated_contents(id) ON DELETE SET NULL
++);
+ CREATE INDEX IF NOT EXISTS idx_designs_created ON designs(created_at);
+ CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at);
+ CREATE INDEX IF NOT EXISTS idx_images_category ON images(category_id);
+diff --git a/scripts/compose_promo.py b/scripts/compose_promo.py
+index 1a084e4..6942c6c 100644
+--- a/scripts/compose_promo.py
++++ b/scripts/compose_promo.py
+@@ -160,7 +160,7 @@ def strike_text(d, x, y, text, font, color):
+ def draw_tag(d, x, y, w, h, text, st, pad):
+     if not text:
+         return
+-    c2, accent = st["c2"], st["accent"]
++    c2, accent = st.get("tag_ink", st["c2"]), st["accent"]
+     if len(text) <= 6:
+         r = int(min(w, h) * 0.12)
+         cx, cy = x + w - r - pad // 2, y + r + pad // 2
+@@ -229,7 +229,7 @@ def draw_text_block(d, x, y, w, h, item, st, centered, stack):
+     outline = st["accent"] if style == "tag" else None
+     d.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
+                         radius=radius, fill=st["c1"], outline=outline, width=4 if outline else 0)
+-    d.text((pill_x + px - tb[0], pill_y + py - tb[1]), price, font=pf, fill=st["accent"])
++    d.text((pill_x + px - tb[0], pill_y + py - tb[1]), price, font=pf, fill=st.get("price_ink", st["accent"]))
+ 
+ 
+ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+@@ -298,11 +298,11 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+         bx, by = x + pad, y + pad
+         d.rounded_rectangle([bx, by, bx + bw + 2 * px, by + bh + 2 * py],
+                             radius=(bh + 2 * py) // 2, fill=st["c1"])
+-        d.text((bx + px - bb[0], by + py - bb[1]), badge, font=bf, fill=WHITE)
++        d.text((bx + px - bb[0], by + py - bb[1]), badge, font=bf, fill=st.get("primary_ink", WHITE))
+ 
+ 
+ def draw_bundle_panel(d, x, y, w, h, bundle, st):
+-    c2, accent = st["c2"], st["accent"]
++    c2, accent = st.get("tag_ink", st["c2"]), st["accent"]
+     d.rounded_rectangle([x, y, x + w, y + h], radius=int(h * 0.18), fill=accent, outline=WHITE, width=5)
+     pad = int(h * 0.12)
+     left_w = int(w * 0.44)
+@@ -331,7 +331,23 @@ def draw_bundle_panel(d, x, y, w, h, bundle, st):
+     d.text((rx + (rw - (pb[2] - pb[0])) / 2 - pb[0], ry + old_h - pb[1]), price, font=pf, fill=c2)
+ 
+ 
++def luminance(color):
++    values=[v/255 for v in color[:3]]
++    values=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in values]
++    return .2126*values[0]+.7152*values[1]+.0722*values[2]
++
++
++def contrast(a,b):
++    high,low=sorted((luminance(a),luminance(b)),reverse=True)
++    return (high+.05)/(low+.05)
++
++
++def ink_on(color):
++    return (15,23,42) if luminance(color)>.179 else WHITE
++
++
+ def main():
++    global F_REG, F_BOLD, F_IMPACT, F_BLACK
+     spec = json.load(open(sys.argv[1], encoding="utf-8"))
+     out = sys.argv[2]
+     recorder = LayerRecorder(sys.argv[3]) if len(sys.argv) > 3 else None
+@@ -346,6 +362,24 @@ def main():
+     if theme not in THEMES:
+         theme = rng.choice(list(THEMES))
+     c1, c2, accent = THEMES[theme]
++    brand = spec.get('brand')
++    logo = None
++    if brand:
++        def rgb(value):
++            return tuple(int(value[i:i+2],16) for i in (1,3,5))
++        c1,c2,accent = (rgb(brand[key]) for key in ('primary_color','secondary_color','accent_color'))
++        families = {
++            'Arial': ('arial.ttf','arialbd.ttf'), 'Impact': ('impact.ttf','impact.ttf'),
++            'Georgia': ('georgia.ttf','georgiab.ttf'), 'Verdana': ('verdana.ttf','verdanab.ttf'),
++            'Courier New': ('cour.ttf','courbd.ttf'), 'DejaVu Sans': ('DejaVuSans.ttf','DejaVuSans-Bold.ttf'),
++        }
++        regular,bold = families[brand['font_family']]
++        F_REG = ['C:/Windows/Fonts/'+regular, '/usr/share/fonts/truetype/dejavu/'+regular] + F_REG
++        F_BOLD = ['C:/Windows/Fonts/'+bold, '/usr/share/fonts/truetype/dejavu/'+bold] + F_BOLD
++        F_IMPACT = F_BOLD
++        F_BLACK = F_BOLD
++        if brand.get('logo_path'):
++            logo = load_product(brand['logo_path'])
+ 
+     card_style = rng.choice(["round", "sharp", "soft", "outline"])
+     st = {
+@@ -373,6 +407,11 @@ def main():
+     bg1, bg2, st["head"], st["pill"], st["radius"] = directions[style]
+     st["card"] = "round"
+     st["tfont"] = F_REG if style == "premium" else F_BOLD if style in ("frozen", "editorial") else F_IMPACT
++    if brand:
++        st['price_ink']=accent if contrast(c1,accent)>=3 else ink_on(c1)
++        st['primary_ink']=ink_on(c1)
++        st['tag_ink']=ink_on(accent)
++        st['white_ink']=c1 if contrast(c1,WHITE)>=3 else ink_on(WHITE)
+     canvas = gradient((W, H), bg1, bg2, "v").convert("RGBA")
+     if style == "flash":
+         canvas = decorate(canvas, W, H, "rays", rng)
+@@ -381,6 +420,9 @@ def main():
+     elif style == "frozen":
+         ImageDraw.Draw(canvas).ellipse([int(-W*.3), int(H*.35), int(W*1.3), int(H*1.3)], fill=(243, 252, 255))
+     header_color = c2 if style in ("premium", "frozen", "editorial") else WHITE
++    if brand:
++        header_bg=c2 if st['head']=='ribbon' else bg1
++        header_color=header_color if contrast(header_color,header_bg)>=3 else ink_on(header_bg)
+ 
+     items = spec["items"]
+     n = len(items)
+@@ -397,8 +439,8 @@ def main():
+     header_h = int(H * ((0.24 if landscape else 0.18) if subtitle else (0.2 if landscape else 0.14)))
+     if st["head"] == "ribbon":
+         header_h += int(H * 0.012)
+-    footer_h = int(H * (0.14 if landscape else 0.075)) if footer_text else 0
+-    bottom_margin = footer_h + gap if footer_text else int(H * 0.03)
++    footer_h = int(H * (0.14 if landscape else 0.075)) if footer_text or logo is not None else 0
++    bottom_margin = footer_h + gap if footer_h else int(H * 0.03)
+ 
+     panel_h = 0
+     if bundle:
+@@ -463,14 +505,31 @@ def main():
+             sx = (W - sw - 2 * spx) / 2
+             d.rounded_rectangle([sx, sub_y, sx + sw + 2 * spx, sub_y + sh_ + 2 * spy],
+                                 radius=(sh_ + 2 * spy) // 2, fill=(255, 255, 255, 240))
+-            d.text((sx + spx - sb[0], sub_y + spy - sb[1]), subtitle, font=sf, fill=c1)
++            d.text((sx + spx - sb[0], sub_y + spy - sb[1]), subtitle, font=sf, fill=st.get("white_ink", c1))
+ 
+-    if footer_text:
++    if footer_h:
+         d.rectangle([0, H - footer_h, W, H], fill=c2)
+-        ff = fit_font(d, footer_text, F_BOLD, W - 2 * margin, int(footer_h * 0.5), 14)
+-        fb = d.textbbox((0, 0), footer_text, font=ff)
+-        d.text(((W - (fb[2] - fb[0])) / 2 - fb[0], H - footer_h + (footer_h - (fb[3] - fb[1])) / 2 - fb[1]),
+-               footer_text, font=ff, fill=WHITE)
++        if recorder: recorder.layers[-1]["brandRole"] = "footer"
++        text_x = margin
++        if logo is not None:
++            box_w, box_h = int(footer_h*1.5), int(footer_h*.72)
++            lx, ly = margin, H-footer_h+(footer_h-box_h)//2
++            d.rounded_rectangle([lx-4,ly-4,lx+box_w+4,ly+box_h+4],radius=8,fill=WHITE)
++            if recorder: recorder.layers[-1]["brandRole"] = "logo"
++            stamp = ImageOps.contain(logo,(box_w,box_h),Image.Resampling.LANCZOS)
++            ix,iy = lx+(box_w-stamp.width)//2,ly+(box_h-stamp.height)//2
++            canvas.alpha_composite(stamp,(ix,iy))
++            if recorder:
++                recorder.image(logo,'Logo brand',ix,iy,stamp.width,stamp.height)
++                recorder.layers[-1]["brandRole"] = "logo"
++            text_x = lx+box_w+gap
++        if footer_text:
++            text_width = W-margin-text_x
++            ff = fit_font(d, footer_text, F_BOLD, text_width, int(footer_h * 0.5), 14)
++            fb = d.textbbox((0, 0), footer_text, font=ff)
++            footer_ink = ink_on(c2) if brand else WHITE
++            d.text((text_x+(text_width-(fb[2]-fb[0]))/2-fb[0], H-footer_h+(footer_h-(fb[3]-fb[1]))/2-fb[1]),footer_text,font=ff,fill=footer_ink)
++            if recorder: recorder.layers[-1]["brandRole"] = "footer"
+ 
+     badge = (spec.get("badge") or "").strip()
+     for (x, y, w, h), item in zip(rects, items):
+diff --git a/scripts/layer_recorder.py b/scripts/layer_recorder.py
+index 6e95d64..5b8f22d 100644
+--- a/scripts/layer_recorder.py
++++ b/scripts/layer_recorder.py
+@@ -45,7 +45,7 @@ class RecordedDraw:
+         b = self.draw.textbbox((0,0), text, font=font)
+         ascent = font.getmetrics()[0] if hasattr(font,'getmetrics') else font.size
+         family, style = font.getname() if hasattr(font,'getname') else ('Arial','Regular')
+-        family = 'DejaVu Sans' if 'DejaVu' in family else 'Impact' if 'Impact' in family else 'Arial'
++        family = next((name for name in ('DejaVu Sans','Impact','Georgia','Verdana','Courier New') if name.split()[0] in family), 'Arial')
+         self.recorder.add('text', text, xy[0], xy[1]+b[1], self.draw.textlength(text,font=font), max(1,b[3]-b[1]),
+                           text=text, fontFamily=family, fontSize=font.size, bold='bold' in style.lower() or 'black' in style.lower(),
+                           baseline=(ascent-b[1])/max(1,b[3]-b[1]), fill=rgba(fill))
+diff --git a/tests/brand-content.test.mjs b/tests/brand-content.test.mjs
+new file mode 100644
+index 0000000..9b6b3a3
+--- /dev/null
++++ b/tests/brand-content.test.mjs
+@@ -0,0 +1,50 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import ts from 'typescript';
++const compile=s=>ts.transpileModule(s,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2017}}).outputText;
++const uri=s=>`data:text/javascript;base64,${Buffer.from(compile(s)).toString('base64')}`;
++const source=name=>fs.readFileSync(new URL(`../lib/${name}.ts`,import.meta.url),'utf8');
++const {validateBrand,validateBrandSnapshot,BRAND_DEFAULTS}=await import(uri(source('brand-options')));
++const {buildPrompt,cleanOutput,priceValue,isTone,isContentType}=await import(uri(source('content')));
++const documentUri=uri(source('design-document'));
++const {newLayer,validateDocument}=await import(documentUri);
++const {applyBrandDocument,readableInk}=await import(uri(source('brand-document').replace('"./design-document"',JSON.stringify(documentUri))));
++const brand={...BRAND_DEFAULTS,id:1,revision:1,name:'ANTOFROZEN',logo_asset_id:null,voice:'Ramah dan jelas',footer_text:'Hubungi toko'};
++test('brand fields are bounded and only supported colors/fonts are accepted',()=>{
++ assert.equal(validateBrand(brand).name,'ANTOFROZEN');
++ for(const patch of [{name:''},{primary_color:'red'},{font_family:'url(https://evil)'},{language:'xx'},{voice:'x'.repeat(601)},{promo_format:'custom'},{is_default:'true'}])assert.throws(()=>validateBrand({...brand,...patch}));
++ assert.throws(()=>validateBrandSnapshot({...brand,logo_asset_id:'../../a.png'}));
++});
++test('brand application preserves product pixels references and exact manual price text',()=>{
++ const image=newLayer('image',{name:'Foto produk',assetId:crypto.randomUUID(),width:200,height:300});
++ const price=newLayer('text',{text:'Rp24.799',name:'Rp24.799'});
++ const doc={version:1,title:'Tes',format:'feed',width:1080,height:1350,layers:[image,price]};
++ const applied=applyBrandDocument(doc,brand);
++ assert.equal(applied.layers.find(l=>l.id===image.id).assetId,image.assetId);
++ assert.equal(applied.layers.find(l=>l.id===price.id).text,'Rp24.799');validateDocument(applied);
++ assert.equal(doc.layers.length,2);
++});
++test('brand reapplication replaces semantic footer and logo without duplicating them',()=>{
++ const doc={version:1,title:'Tes',format:'feed',width:1080,height:1350,layers:[]};
++ const logo={id:crypto.randomUUID(),width:300,height:100};
++ const once=applyBrandDocument(doc,brand,logo),twice=applyBrandDocument(once,brand,logo);
++ assert.equal(once.layers.length,twice.layers.length);assert.equal(twice.layers.filter(l=>l.kind==='image'&&l.brandRole==='logo').length,1);
++});
++test('readable foreground switches with background luminance',()=>{assert.equal(readableInk('#ffffff'),'#0f172a');assert.equal(readableInk('#000000'),'#ffffff');});
++test('requested language, tone and brand guidance reach the factual prompt',()=>{
++ const prompt=buildPrompt({type:'education',tone:'hard_selling',description:'Nugget 500 gram',objects:'',colors:'',visibleText:'',context:'',extra:'Rp25.000',language:'en',brand});
++ assert.ok(prompt.includes('English'));assert.ok(prompt.includes('ANTOFROZEN'));assert.ok(prompt.includes('Hard Selling'));
++ assert.ok(prompt.includes('sertifikasi'));assert.ok(prompt.includes('urgensi stok/deadline palsu'));assert.ok(prompt.includes('jangan menciptakan'));
++ for(const tone of ['friendly','hard_selling','soft_selling'])assert.ok(isTone(tone));for(const type of ['cta','education','copywriting'])assert.ok(isContentType(type));
++});
++test('currency normalization preserves actual supplied nominal values',()=>{
++ assert.equal(priceValue('25','rb'),25000);assert.equal(priceValue('25,5','ribu'),25500);assert.equal(priceValue('1','juta'),1000000);
++ assert.equal(cleanOutput('Promo Rp25rb dan IDR 25.000','Harga Rp25.000'),'Promo Rp25rb dan IDR 25.000');
++ assert.equal(cleanOutput('Harga Rp25 juta','Harga Rp25.000'),'Harga [isi harga]');
++});
++test('weights and telephone digits never authorize hallucinated prices',()=>{
++ assert.equal(cleanOutput('Rp500 dan Rp25000','Berat 500 gram, WA 081225000'),'[isi harga] dan [isi harga]');
++ assert.equal(cleanOutput('Rp99.000 dan Rp25.000','Harga Rp25rb'),'[isi harga] dan Rp25.000');
++ assert.equal(cleanOutput('Rp25.000. Rp99.000!','Harga Rp25.000'),'Rp25.000. [isi harga]!');
++});
+diff --git a/tests/smoke-phase7.mjs b/tests/smoke-phase7.mjs
+new file mode 100644
+index 0000000..adf7e86
+--- /dev/null
++++ b/tests/smoke-phase7.mjs
+@@ -0,0 +1,78 @@
++import assert from 'node:assert/strict';
++import {spawn,spawnSync} from 'node:child_process';
++import {createHash} from 'node:crypto';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import {once} from 'node:events';
++import {createServer} from 'node:http';
++import {createRequire} from 'node:module';
++const require=createRequire(import.meta.url),temp=fs.mkdtempSync(path.join(os.tmpdir(),'autofeeds-phase7-')),dataDir=path.join(temp,'data');
++const port=Number(process.env.PHASE7_TEST_PORT||3067),base=`http://127.0.0.1:${port}`,log=fs.openSync(path.join(temp,'server.log'),'w');
++let server,browser,complete=false,responseMode='normal';const prompts=[];
++const stub=createServer(async(req,res)=>{if(req.method==='POST'){let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);prompts.push(body.prompt);res.setHeader('Content-Type','application/json');if(responseMode==='error'){res.statusCode=500;res.end(JSON.stringify({error:'fixture unavailable'}));return;}res.end(JSON.stringify({response:responseMode==='empty'?'':body.format==='json'?JSON.stringify({description:'Nugget dalam kemasan',objects:['nugget'],dominant_colors:['merah'],visible_text:[],context:'produk'}):'Friendly product caption: Rp25.000. Unknown price Rp99.000.'}));}else{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({models:[{name:'fixture-model'}]}));}});
++async function start(){server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-H','127.0.0.1','-p',String(port)],{stdio:['ignore',log,log],env:{...process.env,AUTOFEEDS_DATA_DIR:dataDir}});for(let i=0;i<80;i++){if(server.exitCode!==null)throw Error(fs.readFileSync(path.join(temp,'server.log'),'utf8'));try{if((await fetch(base+'/api/brand-kits')).ok)return;}catch{}await new Promise(r=>setTimeout(r,200));}throw Error('Server unavailable');}
++async function stop(){if(server&&server.exitCode===null){const end=once(server,'exit');server.kill();await end;}}
++async function api(url,body,status=200,method='POST'){const r=await fetch(base+url,body===undefined?undefined:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});assert.equal(r.status,status,`${url}: ${await r.clone().text()}`);return r.json();}
++async function upload(file){const form=new FormData();form.append('file',new Blob([fs.readFileSync(path.join(temp,file))],{type:'image/png'}),file);const r=await fetch(base+'/api/images',{method:'POST',body:form});assert.equal(r.status,201);return (await r.json()).id;}
++const hash=buffer=>createHash('sha256').update(buffer).digest('hex');
++try{
++ await new Promise(resolve=>stub.listen(0,'127.0.0.1',resolve));const stubPort=stub.address().port;
++ const fixture=spawnSync('python',['-c',`from PIL import Image,ImageDraw
++from pathlib import Path
++import sys
++p=Path(sys.argv[1]);im=Image.new('RGBA',(400,500),(0,0,0,0));ImageDraw.Draw(im).rectangle((90,50,310,450),fill='#d62638');im.save(p/'phase7.png');Image.new('RGBA',(300,100),'#1d4ed8').save(p/'logo.png')`,temp]);assert.equal(fixture.status,0,fixture.stderr.toString());
++ await start();await api('/api/settings',{settings:{ollama_url:`http://127.0.0.1:${stubPort}`,text_model:'fixture-model',default_language:'en'}},200,'PUT');
++ const imageId=await upload('phase7.png'),logoId=await upload('logo.png');
++ const values={name:'BRAND A',primary_color:'#1d4ed8',secondary_color:'#172554',accent_color:'#fde047',font_family:'Arial',footer_text:'Footer A - hubungi toko',voice:'Ramah dan jelas A',promo_style:'retail',promo_format:'feed',promo_title:'PROMO BRAND A',promo_badge:'PROMO',tone:'friendly',language:'en',is_default:true,logo_image_id:logoId};
++ const {kit:a}=await api('/api/brand-kits',values,201);assert.equal((await api('/api/brand-kits')).kits.length,1);
++ const logoHash=hash(Buffer.from(await(await fetch(base+`/api/brand-logo?id=${a.logo_asset_id}`)).arrayBuffer()));
++ const promoBody={count:1,format:'feed',theme:'merah',style:'retail',brand_kit_id:a.id,promo_type:'harga_spesial',items:[{image_id:imageId,name:'Nugget 500 gram',price:'24799',old_price:'30999'}]};
++ const firstPromo=await api('/api/promo',promoBody,201),firstEditor=await api('/api/designs',{promo_id:firstPromo.id},201);
++ assert.ok(firstEditor.doc.layers.some(l=>l.brandRole==='logo'&&l.kind==='image'));assert.ok(firstEditor.doc.layers.some(l=>l.text===values.footer_text));assert.ok(firstEditor.doc.layers.some(l=>l.text==='Rp24.799'));
++ const generated=await api('/api/content',{image_id:imageId,content_type:'education',tone:'hard_selling',brand_kit_id:a.id,manual_facts:{description:'Nugget ayam 500 gram'},extra:'Harga Rp25.000'},201);
++ assert.equal(generated.content.language,'en');assert.equal(generated.content.brand_name,'BRAND A');assert.ok(generated.content.content.includes('Rp25.000'));assert.ok(generated.content.content.includes('[isi harga]'));
++ assert.ok(prompts.at(-1).includes('English'));assert.ok(prompts.at(-1).includes('jangan menciptakan'));assert.ok(prompts.at(-1).includes('Ramah dan jelas A'));
++ await api('/api/content',{id:generated.content.id,is_saved:true},200,'PATCH');assert.ok((await api('/api/content?saved=1')).contents.some(c=>c.id===generated.content.id));
++ const {kit:b}=await api('/api/brand-kits',{...values,name:'BRAND B',primary_color:'#dc2626',secondary_color:'#7f1d1d',footer_text:'Footer B - pesan sekarang',voice:'Gaya B',logo_image_id:null,language:'id'},201);
++ const kits=(await api('/api/brand-kits')).kits;assert.equal(kits.filter(k=>k.is_default).length,1);assert.equal(kits.find(k=>k.is_default).id,b.id);
++ await api('/api/brand-kits',{...a,name:'STALE'},409,'PATCH');
++ const currentA=kits.find(k=>k.id===a.id);await api('/api/brand-kits',{...currentA,name:'BRAND A CHANGED',footer_text:'Footer A CHANGED',voice:'Gaya A CHANGED'},200,'PATCH');
++ const repeated=await api('/api/content',{source_content_id:generated.content.id,language:'id',extra:'Rp100.000'},201);assert.equal(repeated.content.brand_name,'BRAND A');assert.equal(repeated.content.language,'en');assert.ok(prompts.at(-1).includes('Ramah dan jelas A'));assert.ok(!prompts.at(-1).includes('Gaya A CHANGED'));
++ const applied=await api('/api/design-brand',{design_id:firstEditor.id,revision:1,doc:firstEditor.doc,brand_kit_id:b.id});assert.ok(applied.doc.layers.some(l=>l.text==='Rp24.799'));assert.ok(applied.doc.layers.some(l=>l.text===b.footer_text));
++ await api('/api/designs',{id:firstEditor.id,revision:1,doc:applied.doc},200,'PATCH');await api('/api/design-brand',{design_id:firstEditor.id,revision:1,doc:applied.doc,brand_kit_id:b.id},409);
++ const template=await api('/api/brand-templates',{brand_id:a.id,design_id:firstEditor.id,name:'Template Brand'},201);assert.equal((await api('/api/brand-templates')).templates.length,1);
++ const used=await api('/api/brand-templates',{use_id:template.id},201);assert.notEqual(used.doc.layers.find(l=>l.kind==='image')?.assetId,template.doc.layers.find(l=>l.kind==='image')?.assetId);
++ await api('/api/brand-kits',{...values,name:'BAD',primary_color:'red'},400);
++ await api('/api/content',{image_id:imageId,content_type:'cta',tone:'friendly',language:'xx',manual_facts:{description:'Produk'}},400);
++ await api('/api/content',{image_id:imageId,content_type:'cta',tone:'friendly',manual_facts:{description:''}},400);
++ responseMode='empty';await api('/api/content',{source_content_id:generated.content.id},502);responseMode='error';await api('/api/content',{source_content_id:generated.content.id},500);responseMode='normal';
++ if(process.env.PHASE7_UI==='1'){
++  const {chromium}=require('playwright');let executablePath=process.env.PHASE7_CHROMIUM||chromium.executablePath(),args=['--no-sandbox'];
++  if(process.env.PHASE7_BROWSER_MODULE){const portable=(await import(process.env.PHASE7_BROWSER_MODULE)).default;executablePath=await portable.executablePath();args=portable.args;}
++  browser=await chromium.launch({executablePath,args,headless:true});const page=await browser.newPage({viewport:{width:1440,height:1100},acceptDownloads:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
++  await page.goto(base+'/brand-kit');await page.getByRole('button',{name:/BRAND B/}).click();assert.equal(await page.getByLabel('Nama brand',{exact:true}).inputValue(),'BRAND B');
++  await page.getByLabel('Panduan gaya bahasa',{exact:true}).fill('Ramah dan jelas untuk browser test');await page.getByRole('button',{name:'Simpan Brand Kit',exact:true}).click();await page.getByRole('status').filter({hasText:'Brand Kit tersimpan'}).waitFor();
++  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/autofeeds-phase7-brand-desktop.png',fullPage:true,animations:'disabled'});
++  await page.getByRole('button',{name:'Gunakan template',exact:true}).click();await page.getByLabel('Nama desain',{exact:true}).waitFor();await page.getByLabel('Brand Kit editor',{exact:true}).selectOption(String(b.id));await page.getByRole('button',{name:'Terapkan Brand Kit',exact:true}).click();await page.getByRole('status').filter({hasText:'Brand diterapkan'}).waitFor();assert.ok((await page.locator('[data-layer-id] text').allTextContents()).includes('Rp24.799'));await page.getByRole('button',{name:/^Simpan/}).click();await page.getByRole('status').filter({hasText:'Perubahan tersimpan'}).waitFor();
++  await page.goto(base+'/promo');await page.getByLabel('Brand Kit',{exact:true}).locator(`option[value="${b.id}"]`).waitFor({state:'attached'});assert.equal(await page.getByLabel('Brand Kit',{exact:true}).inputValue(),String(b.id));
++  await page.goto(base+'/content-studio');await page.getByRole('button',{name:'phase7.png'}).click();await page.getByLabel('Deskripsi',{exact:true}).fill('Nugget ayam 500 gram, informasi dari pemilik');await page.getByPlaceholder(/Contoh: Nugget Ayam/).fill('Harga Rp25.000');await page.getByLabel('Bahasa hasil',{exact:true}).selectOption('en');await page.getByRole('button',{name:'Call to Action',exact:true}).click();await page.getByRole('button',{name:'Buat konten',exact:true}).click();
++  const firstResult=page.locator('[data-content-id]').first();await firstResult.waitFor();assert.ok((await firstResult.locator('textarea').inputValue()).includes('[isi harga]'));
++  await firstResult.getByRole('button',{name:'Simpan ke Library',exact:true}).click();await page.getByText('Tersimpan di Library',{exact:true}).first().waitFor();
++  const download=page.waitForEvent('download');await page.locator('[data-content-id]').first().getByRole('button',{name:'Unduh .txt',exact:true}).click();const file=await download;assert.ok(fs.readFileSync(await file.path(),'utf8').includes('Rp25.000'));
++  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('aside').getBoundingClientRect().right<=0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:'/tmp/autofeeds-phase7-content-mobile.png',fullPage:true,animations:'disabled'});
++  assert.deepEqual(errors,[]);await browser.close();browser=undefined;console.log('PASS browser: edit Brand Kit, default brand in Promo Composer, manual Content Studio, language, CTA, save and TXT download, desktop/mobile overflow.');
++ }
++ await api(`/api/analyze?image_id=${imageId}`,{},202);let analysis;for(let i=0;i<100;i++){analysis=await api(`/api/analyze?image_id=${imageId}`);if(analysis.job?.status==='done')break;await new Promise(r=>setTimeout(r,20));}assert.ok(analysis.analysis);const analyzed=await api('/api/content',{image_id:imageId,content_type:'cta',tone:'friendly',language:'id',brand_kit_id:0,extra:'Harga Rp25.000'},201);assert.equal(analyzed.content.language,'id');assert.equal(analyzed.content.brand_name,null);assert.ok(prompts.at(-1).includes('Bahasa Indonesia'));
++ await api(`/api/brand-kits?id=${a.id}`,{},200,'DELETE');assert.equal((await api('/api/brand-templates')).templates.find(t=>t.design_id===template.id).brand_id,null);
++ await api(`/api/images?id=${logoId}`,{},200,'DELETE');assert.equal(hash(Buffer.from(await(await fetch(base+`/api/brand-logo?id=${a.logo_asset_id}`)).arrayBuffer())),logoHash);
++ const restoredPromo=await api('/api/promo',{regenerate_id:firstPromo.id},201),restoredDoc=await api('/api/designs',{promo_id:restoredPromo.id},201);assert.ok(restoredDoc.doc.layers.some(l=>l.text===values.footer_text));assert.ok(restoredDoc.doc.layers.some(l=>l.brandRole==='logo'&&l.kind==='image'));
++ const afterDeleted=await api('/api/content',{source_content_id:generated.content.id},201);assert.equal(afterDeleted.content.brand_name,'BRAND A');
++ await api(`/api/designs?id=${firstEditor.id}`,{},200,'DELETE');await api('/api/brand-templates',{use_id:template.id},201);
++ await stop();await start();assert.ok((await api('/api/brand-kits')).kits.some(k=>k.id===b.id));assert.ok((await api('/api/content?image_id='+imageId)).contents.some(c=>c.id===generated.content.id));assert.equal((await api('/api/brand-templates')).templates.length,1);
++ await api(`/api/brand-templates?id=${template.id}`,{},200,'DELETE');assert.equal((await api('/api/brand-templates')).templates.length,0);assert.equal((await fetch(base+`/api/designs?id=${used.id}`)).status,200);
++ console.log('PASS API: kit CRUD/revisions/default, persistent logo snapshots, branded poster/editor, template independence, manual facts, languages, price filter, content snapshots, Ollama transport/error handling, restart persistence. Text generation is tested against an explicit HTTP fixture, not a real language model.');complete=true;
++}finally{
++ if(!complete)console.error(fs.readFileSync(path.join(temp,'server.log'),'utf8'));
++ await browser?.close();await stop();stub.closeAllConnections();await new Promise(resolve=>stub.close(resolve));fs.closeSync(log);fs.rmSync(temp,{recursive:true,force:true});
++}
+diff --git a/tests/test_brand_renderer.py b/tests/test_brand_renderer.py
+new file mode 100644
+index 0000000..211a493
+--- /dev/null
++++ b/tests/test_brand_renderer.py
+@@ -0,0 +1,31 @@
++import itertools,json,subprocess,sys,tempfile,unittest
++from pathlib import Path
++from PIL import Image,ImageDraw
++ROOT=Path(__file__).resolve().parents[1]
++sys.path.insert(0,str(ROOT/'scripts'))
++from compose_promo import contrast,ink_on,FORMATS
++from creative_layout import STYLES
++
++class BrandRendererTests(unittest.TestCase):
++ def test_brand_logo_palette_footer_and_layer_capture(self):
++  with tempfile.TemporaryDirectory() as tmp:
++   root=Path(tmp);source=root/'product.png';logo=root/'logo.png'
++   Image.new('RGBA',(400,500),'#d62638').save(source)
++   im=Image.new('RGBA',(300,100),(0,0,0,0));ImageDraw.Draw(im).rectangle((10,10,290,90),fill='#123456');im.save(logo)
++   product_bytes=source.read_bytes();logo_bytes=logo.read_bytes()
++   for i,(style,fmt) in enumerate(itertools.product(STYLES,FORMATS)):
++    with self.subTest(style=style,format=fmt):
++     folder=root/str(i);folder.mkdir()
++     spec=dict(format=fmt,theme='merah',seed=42,style=style,layout_variant=i%2,mode='items',title='PROMO',subtitle='Berlaku pekan ini',footer='ANTOFROZEN • Hubungi toko',badge='PROMO',items=[dict(path=str(source),name='Nugget 500 gram',price_text='Rp24.799',old_text='Rp30.999',tag='-20%')],brand=dict(name='ANTOFROZEN',primary_color='#1d4ed8',secondary_color='#172554',accent_color='#fde047',font_family='Arial',logo_path=str(logo)))
++     (folder/'spec.json').write_text(json.dumps(spec))
++     subprocess.run([sys.executable,str(ROOT/'scripts/compose_promo.py'),str(folder/'spec.json'),str(folder/'poster.jpg'),str(folder)],check=True,capture_output=True)
++     doc=json.loads((folder/'document.json').read_text())
++     self.assertEqual(sum(l.get('brandRole')=='logo' and l['kind']=='image' for l in doc['layers']),1)
++     self.assertTrue(any(l.get('text')=='Rp24.799' for l in doc['layers']))
++     self.assertTrue(any(l.get('text')==spec['footer'] and l.get('brandRole')=='footer' for l in doc['layers']))
++     self.assertTrue(any(l.get('fill')=='#1d4ed8' for l in doc['layers']))
++   self.assertEqual(source.read_bytes(),product_bytes);self.assertEqual(logo.read_bytes(),logo_bytes)
++ def test_ink_selection_has_readable_contrast(self):
++  for color in [(255,255,255),(0,0,0),(230,230,220),(20,30,100),(220,38,38)]:self.assertGreater(contrast(color,ink_on(color)),3)
++
++if __name__=='__main__':unittest.main()

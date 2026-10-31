@@ -18,6 +18,18 @@ CREATE TABLE IF NOT EXISTS images (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS image_variants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+  stored_filename TEXT NOT NULL UNIQUE,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  options_json TEXT NOT NULL,
+  engine TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_variants_image ON image_variants(image_id);
+
 CREATE TABLE IF NOT EXISTS image_analysis (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
@@ -70,6 +82,17 @@ CREATE TABLE IF NOT EXISTS promo_designs (
   output_filename TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS promo_generation (
+  design_id INTEGER PRIMARY KEY REFERENCES promo_designs(id) ON DELETE CASCADE,
+  batch_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  style TEXT NOT NULL,
+  seed INTEGER NOT NULL,
+  layout_variant INTEGER NOT NULL DEFAULT 0,
+  is_saved INTEGER NOT NULL DEFAULT 0,
+  parent_design_id INTEGER REFERENCES promo_designs(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_promo_batch ON promo_generation(batch_id);
 -- Fase 1: tabel untuk desain berbasis layer dan Brand Kit (dipakai fase 2-7)
 CREATE TABLE IF NOT EXISTS designs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +108,18 @@ CREATE TABLE IF NOT EXISTS designs (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS design_revisions (
+  design_id INTEGER PRIMARY KEY REFERENCES designs(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 1,
+  source_promo_id INTEGER REFERENCES promo_designs(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS design_assets (
+  id TEXT PRIMARY KEY,
+  design_id INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_design_assets_owner ON design_assets(design_id);
 CREATE TABLE IF NOT EXISTS brand_kits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -97,6 +132,28 @@ CREATE TABLE IF NOT EXISTS brand_kits (
   is_default INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS brand_profiles (
+  brand_id INTEGER PRIMARY KEY REFERENCES brand_kits(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 1,
+  options_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS brand_assets (
+  id TEXT PRIMARY KEY,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS brand_templates (
+  design_id INTEGER PRIMARY KEY REFERENCES designs(id) ON DELETE CASCADE,
+  brand_id INTEGER REFERENCES brand_kits(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS content_context (
+  content_id INTEGER PRIMARY KEY REFERENCES generated_contents(id) ON DELETE CASCADE,
+  language TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  parent_content_id INTEGER REFERENCES generated_contents(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_designs_created ON designs(created_at);
 CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at);

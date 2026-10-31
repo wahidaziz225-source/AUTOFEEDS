@@ -1,4 +1,7 @@
 export const CONTENT_TYPES = [
+  { id: "cta", label: "Call to Action" },
+  { id: "copywriting", label: "Copywriting Promosi" },
+  { id: "education", label: "Konten Edukasi Produk" },
   { id: "caption_instagram", label: "Caption Instagram" },
   { id: "caption_facebook", label: "Caption Facebook" },
   { id: "hashtag", label: "Hashtag" },
@@ -10,6 +13,9 @@ export const CONTENT_TYPES = [
 ] as const;
 
 export const TONES = [
+  { id: "friendly", label: "Friendly" },
+  { id: "hard_selling", label: "Hard Selling" },
+  { id: "soft_selling", label: "Soft Selling" },
   { id: "profesional", label: "Profesional" },
   { id: "santai", label: "Santai" },
   { id: "persuasif", label: "Persuasif" },
@@ -26,6 +32,9 @@ export function isTone(v: string): boolean {
 }
 
 const TYPE_INSTRUCTIONS: Record<string, string> = {
+  cta: "Tulis 5 call to action singkat dan relevan, tanpa klaim kelangkaan stok atau deadline yang tidak diberikan.",
+  copywriting: "Tulis satu copywriting promosi: headline, fakta produk, alasan membeli yang didukung data, dan call to action.",
+  education: "Tulis konten edukasi singkat dari fakta produk yang tersedia. Jika informasi tidak cukup, jelaskan pertanyaan yang perlu dikonfirmasi; jangan menciptakan petunjuk penyimpanan, suhu, cara masak, komposisi, atau klaim kesehatan.",
   caption_instagram:
     "Tulis 1 caption Instagram: kalimat pembuka yang menarik, isi 2-4 kalimat, ajakan bertindak di akhir, emoji secukupnya. Di baris terakhir tambahkan 5-8 hashtag.",
   caption_facebook:
@@ -35,7 +44,7 @@ const TYPE_INSTRUCTIONS: Record<string, string> = {
   headline:
     "Tulis 5 alternatif headline promosi, masing-masing maksimal 10 kata, dalam daftar bernomor.",
   description:
-    "Tulis 1 deskripsi produk berupa satu paragraf (3-5 kalimat) yang menjelaskan tampilan dan manfaat berdasarkan data yang tersedia saja.",
+    "Tulis 1 deskripsi produk berupa satu paragraf (3-5 kalimat) yang menjelaskan tampilan dan fakta yang tersedia saja; manfaat hanya jika diberikan pemilik produk.",
   promo:
     "Tulis 5 kalimat promosi singkat (maksimal 20 kata), dalam daftar bernomor.",
   ideas:
@@ -53,6 +62,8 @@ export type PromptInput = {
   visibleText: string;
   context: string;
   extra: string;
+  language?: "id" | "en";
+  brand?: { name: string; voice: string; footer_text: string } | null;
 };
 
 export function buildPrompt(i: PromptInput): string {
@@ -66,33 +77,45 @@ export function buildPrompt(i: PromptInput): string {
   ];
   if (i.extra.trim()) lines.push(`Info tambahan dari pemilik produk: ${i.extra.trim()}`);
 
-  return `Kamu adalah penulis konten media sosial berbahasa Indonesia.
+  const language=i.language==='en'?'English':'Bahasa Indonesia';
+  const brand=i.brand?`\nIDENTITAS BRAND (gaya dan kontak, bukan sumber klaim produk):\nNama: ${i.brand.name}\nPanduan gaya: ${i.brand.voice || '-'}\nFooter/kontak yang diberikan pemilik: ${i.brand.footer_text || '-'}\n`:'';
+  return `Kamu adalah penulis konten media sosial. Bahasa keluaran wajib: ${language}.
 
 DATA PRODUK:
 ${lines.join("\n")}
 
+${brand}
 TUGAS:
 ${TYPE_INSTRUCTIONS[i.type] ?? TYPE_INSTRUCTIONS.caption_instagram}
 
 Gaya bahasa: ${toneLabel}.
 
 ATURAN WAJIB:
-- Tulis dalam Bahasa Indonesia.
+- Tulis dalam ${language}.
 - Hanya gunakan fakta dari DATA PRODUK di atas.
-- Jangan mengarang nama merek, harga, ukuran, diskon, bahan, atau klaim kesehatan yang tidak tertulis di data.
-- Harga, promo, dan kontak hanya boleh disebut jika ada di "Info tambahan".
+- Jangan mengarang nama merek, harga, ukuran, diskon, bahan, sertifikasi, komposisi, manfaat, atau klaim kesehatan yang tidak tertulis di data.
+- Harga dan promo hanya boleh disebut jika diberikan secara eksplisit oleh pemilik. Kontak hanya dari Info tambahan atau footer brand.
+- Panduan gaya tidak boleh menambah fakta, klaim sertifikasi, komposisi, atau manfaat produk.
+- Jangan membuat urgensi stok/deadline palsu meskipun gaya hard selling.
 - Tulis hasilnya langsung, tanpa kalimat pembuka seperti "Berikut adalah" dan tanpa penjelasan tambahan.`;
 }
-// Hapus harga yang tidak ditulis pengguna + sisa tanda markdown
-export function cleanOutput(text: string, extra: string): string {
-  const allowed = new Set(
-    (extra.match(/\d[\d.,]*/g) ?? []).map((n) => n.replace(/\D/g, ""))
-  );
-  const priceRe = /Rp\.?\s?(\d[\d.,]*)(\s?(?:rb|ribu|k|jt|juta))?/gi;
-  return text
-    .replace(priceRe, (m, num: string) =>
-      allowed.has(num.replace(/\D/g, "")) ? m : "[isi harga]"
-    )
-    .replace(/\*\*/g, "")
-    .trim();
+// Compare actual currency values; weights and telephone digits never authorize prices.
+const PRICE = /\b(?:Rp\.?|IDR)\s*(\d+(?:[.,]\d+)*)(?:\s*(rb|ribu|k|jt|juta))?(?![A-Za-z0-9]|[.,]\d)/gi;
+export function priceValue(number:string,suffix=''):number|null{
+  const unit=suffix.toLowerCase();let value:number;
+  if(unit){
+    if(!/^\d+(?:[.,]\d{1,3})?$/.test(number))return null;
+    value=Number(number.replace(',','.'))*(/^(jt|juta)$/.test(unit)?1_000_000:1000);
+  }else{
+    if(!/^(?:\d+|\d{1,3}(?:[.,]\d{3})+)$/.test(number))return null;
+    value=Number(number.replace(/[.,]/g,''));
+  }
+  return Number.isSafeInteger(value)&&value>0?value:null;
+}
+export function cleanOutput(text: string, authorizedFacts: string): string {
+  const allowed=new Set<number>();
+  for(const match of authorizedFacts.matchAll(new RegExp(PRICE.source,'gi'))){const value=priceValue(match[1],match[2]);if(value!==null)allowed.add(value);}
+  return text.replace(new RegExp(PRICE.source,'gi'),(whole,number:string,suffix:string)=>{
+    const value=priceValue(number,suffix);return value!==null&&allowed.has(value)?whole:'[isi harga]';
+  }).replace(/\*\*/g,'').trim().slice(0,10000);
 }
