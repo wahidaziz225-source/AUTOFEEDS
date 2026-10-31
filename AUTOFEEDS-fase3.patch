@@ -1,0 +1,670 @@
+From 71c9961e64bb0e12d5bafdfc07901c679be7eaef Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 31 Oct 2026 19:01:24 +0100
+Subject: [PATCH] Implement phase 3 creative poster layouts and precise promo
+ pricing
+
+---
+ .gitignore                    |  4 ++
+ README.md                     | 28 +++++++++++
+ app/api/promo/route.ts        |  8 +++
+ app/promo/page.tsx            | 20 +++++++-
+ docs/AUDIT-FASE-3.md          | 60 ++++++++++++++++++++++
+ lib/promo-options.ts          | 22 ++++++--
+ lib/promo.ts                  |  1 +
+ requirements.txt              |  1 +
+ scripts/compose_promo.py      | 95 ++++++++++++++++++++++++-----------
+ scripts/creative_layout.py    | 48 ++++++++++++++++++
+ tests/promo-options.test.mjs  | 24 +++++++++
+ tests/test_creative_layout.py | 75 +++++++++++++++++++++++++++
+ 12 files changed, 352 insertions(+), 34 deletions(-)
+ create mode 100644 docs/AUDIT-FASE-3.md
+ create mode 100644 requirements.txt
+ create mode 100644 scripts/creative_layout.py
+ create mode 100644 tests/promo-options.test.mjs
+ create mode 100644 tests/test_creative_layout.py
+
+diff --git a/.gitignore b/.gitignore
+index e3ff437..2f7fc14 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -41,3 +41,7 @@ yarn-error.log*
+ next-env.d.ts
+ /database
+ /storage
++
++# Python renderer
++__pycache__/
++*.py[cod]
+diff --git a/README.md b/README.md
+index e215bc4..a234979 100644
+--- a/README.md
++++ b/README.md
+@@ -34,3 +34,31 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
+ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+ 
+ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
++
++## AUTOfEEDS — Creative Layout Engine (Fase 3)
++
++Audit dan batas implementasi: [docs/AUDIT-FASE-3.md](docs/AUDIT-FASE-3.md).
++
++### Menjalankan di Windows 11
++
++1. Pasang Node.js yang memenuhi dependensi proyek dan Python 3.10+.
++2. Pastikan `node --version`, `npm --version`, dan `python --version` berhasil di terminal.
++3. Dari folder proyek: `npm ci` lalu `python -m pip install -r requirements.txt`.
++4. Jalankan `npm run dev`, buka `http://localhost:3000`.
++5. Upload foto, buka Promo Composer, isi harga, pilih konsep, lalu buat visual promo.
++
++Renderer poster berjalan lokal tanpa Ollama. Analisis gambar dan pembuatan caption memerlukan Ollama serta model yang dipilih di Settings. Jangan menganggap model telah terpasang hanya karena namanya tercantum di pengaturan.
++
++Foto asli, hasil poster dan database tersimpan lokal. Backup folder `database` dan `storage` saat aplikasi berhenti sebelum memindahkan komputer atau memperbarui aplikasi.
++
++### Pemeriksaan
++
++```bash
++npx tsc --noEmit
++npm run lint
++npm run build
++node --test tests/promo-options.test.mjs
++python -m unittest discover -s tests -p "test_*.py"
++```
++
++Fase ini menghasilkan satu JPG per proses. Editor layer, batch variasi, pengolahan background dan ekspor PNG masih dikerjakan pada fase berikutnya.
+diff --git a/app/api/promo/route.ts b/app/api/promo/route.ts
+index 2e03db5..6537944 100644
+--- a/app/api/promo/route.ts
++++ b/app/api/promo/route.ts
+@@ -4,6 +4,7 @@ import { getDb, logActivity } from "@/lib/db";
+ import {
+   MAX_PROMO_ITEMS,
+   PROMO_FORMATS,
++  PROMO_STYLES,
+   PROMO_THEMES,
+   PROMO_TYPES,
+   computeItem,
+@@ -32,6 +33,8 @@ export async function POST(req: Request) {
+     const format = clean(body.format, 20);
+     const theme = clean(body.theme, 20);
+     const type = clean(body.promo_type, 20);
++    const style = clean(body.style ?? "retail", 20);
++    if (!PROMO_STYLES.some((s) => s.id === style)) return bad("Konsep desain tidak valid.");
+ 
+     if (!PROMO_FORMATS.some((f) => f.id === format)) return bad("Ukuran tidak valid.");
+     if (!PROMO_THEMES.some((t) => t.id === theme)) return bad("Tema tidak valid.");
+@@ -71,6 +74,9 @@ export async function POST(req: Request) {
+     const normals: (number | null)[] = [];
+ 
+     for (const r of rawItems) {
++      if (!r || typeof r !== "object" || !Number.isSafeInteger(Number(r.image_id)) || Number(r.image_id) <= 0) {
++        return bad("Data produk tidak valid.");
++      }
+       const row = db
+         .prepare("SELECT name, stored_filename FROM images WHERE id = ?")
+         .get(Number(r.image_id)) as { name: string; stored_filename: string } | undefined;
+@@ -115,6 +121,7 @@ export async function POST(req: Request) {
+       format,
+       theme,
+       seed,
++      style,
+       mode: type === "bundling" ? "bundle" : "items",
+       title,
+       subtitle: clean(body.subtitle, 80),
+@@ -136,6 +143,7 @@ export async function POST(req: Request) {
+         theme,
+         JSON.stringify({
+           promo_type: type,
++          style,
+           seed,
+           items: items.map((i) => ({
+             name: i.name,
+diff --git a/app/promo/page.tsx b/app/promo/page.tsx
+index 666a934..7d7f1f2 100644
+--- a/app/promo/page.tsx
++++ b/app/promo/page.tsx
+@@ -6,6 +6,7 @@ import { Loader2, Wand2, Download, Trash2, AlertCircle, X, Shuffle } from "lucid
+ import {
+   MAX_PROMO_ITEMS,
+   PROMO_FORMATS,
++  PROMO_STYLES,
+   PROMO_THEMES,
+   PROMO_TYPES,
+   computeItem,
+@@ -35,6 +36,7 @@ export default function PromoPage() {
+   const [footer, setFooter] = useState("");
+   const [badge, setBadge] = useState("PROMO");
+   const [format, setFormat] = useState("feed");
++  const [style, setStyle] = useState("retail");
+   const [theme, setTheme] = useState("acak");
+   const [busy, setBusy] = useState(false);
+   const [error, setError] = useState("");
+@@ -134,6 +136,7 @@ export default function PromoPage() {
+           badge,
+           format,
+           theme,
++          style,
+           items: sel.map((s) => ({
+             image_id: s.imageId,
+             name: s.name,
+@@ -176,7 +179,7 @@ export default function PromoPage() {
+       <header>
+         <h1 className="text-2xl font-bold text-slate-900">Promo Composer</h1>
+         <p className="text-sm text-slate-500">
+-          Pilih jenis promo dan sampai {MAX_PROMO_ITEMS} produk. Setiap generate menghasilkan tampilan yang berbeda.
++          Pilih jenis promo dan sampai {MAX_PROMO_ITEMS} produk. Pilih satu dari enam konsep komposisi. Foto asli dan informasi produk tetap digunakan.
+         </p>
+       </header>
+ 
+@@ -375,12 +378,25 @@ export default function PromoPage() {
+               </ul>
+             )}
+             <p className="text-xs text-slate-400">
+-              Angka saja otomatis jadi format rupiah (25000 menjadi Rp25.000). Hasil diskon persen dibulatkan ke Rp100 terdekat.
++              Angka saja otomatis jadi format rupiah (25000 menjadi Rp25.000). Hasil diskon persen dibulatkan ke rupiah terdekat.
+             </p>
+           </div>
+ 
+           <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+             <h2 className="text-sm font-semibold text-slate-900">4. Teks dan tampilan</h2>
++            <fieldset>
++              <legend className="mb-2 text-xs font-medium text-slate-500">Konsep desain</legend>
++              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
++                {PROMO_STYLES.map((s) => (
++                  <button key={s.id} type="button" aria-pressed={style === s.id}
++                    onClick={() => setStyle(s.id)}
++                    className={`rounded-xl border p-3 text-left ${style === s.id ? "border-indigo-600 bg-indigo-50" : "border-slate-200"}`}>
++                    <span className="block text-sm font-semibold">{s.label}</span>
++                    <span className="text-xs text-slate-500">{s.hint}</span>
++                  </button>
++                ))}
++              </div>
++            </fieldset>
+             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+               <label className="text-xs font-medium text-slate-500">
+                 Judul
+diff --git a/docs/AUDIT-FASE-3.md b/docs/AUDIT-FASE-3.md
+new file mode 100644
+index 0000000..66375d9
+--- /dev/null
++++ b/docs/AUDIT-FASE-3.md
+@@ -0,0 +1,60 @@
++# Audit AUTOfEEDS dan implementasi Fase 3
++
++Tanggal: 1 November 2026. Baseline: `f8159df`.
++
++## Struktur dan kondisi aktual
++
++- `app/`: dashboard, upload, analyzer, Content Studio, Promo Composer, library, history, settings, dan API App Router.
++- `components/`: sidebar responsif dan komponen UI bersama.
++- `lib/`: SQLite, validasi upload, penyimpanan lokal, Ollama, prompt, kalkulasi promo.
++- `scripts/`: resize foto untuk analisis dan renderer poster Pillow.
++- Stack dipertahankan: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, better-sqlite3, Python/Pillow.
++- SQLite disimpan di `database/`, gambar dan poster di `storage/uploads/`. Keduanya diabaikan Git, sehingga harus dibackup terpisah.
++
++Fase 1–2 memiliki fondasi nyata: validasi signature gambar dan nama file UUID, query terparameterisasi, WAL/foreign keys, log aktivitas, navigasi responsif, state loading/error, dan alur Ollama dari server. Ini bukan sertifikasi bahwa seluruh kebutuhan fase awal bebas bug.
++
++## Temuan dan tindakan
++
++| Temuan baseline | Status |
++| --- | --- |
++| Variasi poster didominasi random warna/dekorasi dengan satu grid | Fase 3: enam art direction dan aturan komposisi baru |
++| Diskon persen dibulatkan ke Rp100, mengubah hasil hitungan | Diperbaiki: pembulatan hanya ke rupiah terdekat |
++| Parsing harga membuang semua karakter nonangka (`25rb` menjadi 25) | Diperbaiki: nominal positif dan format ribuan divalidasi, input ambigu ditolak |
++| Harga coret lebih rendah dari harga promo diterima | Diperbaiki: ditolak, dengan pesan yang jelas |
++| Foto gagal dibaca diabaikan dan poster tanpa foto tetap tersimpan | Diperbaiki: proses gagal dengan error |
++| Tabel `designs` dan `brand_kits` ada, tetapi belum digunakan aplikasi | Tetap tersedia untuk fase 6–7; belum diklaim sebagai fitur selesai |
++| Background removal/enhancement belum tersedia | Fase 4 |
++| Satu request menghasilkan satu JPG | Tetap satu desain; batch 4–6 desain adalah fase 5 |
++| Editor layer belum tersedia; output masih raster | Fase 6 |
++| PNG/custom size belum tersedia | Fase 8 |
++| Bahasa default Inggris tersedia di Settings, prompt tetap Indonesia | Backlog perbaikan Content Studio fase 7 |
++| Status pekerjaan analisis disimpan di memori | Hasil tersimpan di SQLite, pekerjaan aktif tidak dilanjutkan setelah restart |
++| README masih bawaan create-next-app | Ditambah petunjuk lokal dan pengujian |
++
++## Fase 3 yang diimplementasikan
++
++Enam konsep dipilih di Promo Composer dan divalidasi lagi pada server:
++
++1. Premium Minimalist: latar netral, tipografi ringan, foto dan informasi berdampingan untuk satu produk; susunan baris untuk beberapa produk.
++2. Flash Sale: kontras tinggi, hero produk dan rail pendukung; harga besar.
++3. Modern Frozen Food: latar bernuansa dingin, bidang lengkung, panel produk bersih.
++4. Editorial Creative: bidang diagonal, komposisi asimetris dan hero pada sisi berbeda.
++5. Modern Retail: grid katalog yang rapi.
++6. Product Spotlight: panggung gelap, foto besar, komposisi bertingkat untuk beberapa produk.
++
++Komposisi menyesuaikan 1–6 produk, empat ukuran lama, dan bundling. Konsep disimpan pada `promo_designs.items_json.style`; tidak diperlukan migrasi destruktif. Request lama tanpa `style` menggunakan `retail`. Poster lama tetap dapat dibuka dan diunduh. Foto sumber tidak ditimpa. Nuansa frozen adalah desain latar, bukan klaim bahwa AI sudah menghapus background.
++
++## Validasi
++
++- TypeScript `--noEmit`, ESLint dan production build.
++- Empat tes Node: parsing nominal, diskon presisi, harga manual/harga coret, ID konsep.
++- Empat tes Python: 144 kombinasi geometri (6 konsep × 4 format × 6 jumlah produk), perbedaan/repeatability komposisi, 48 render JPG (6 konsep × 4 format × 2 mode), dan error foto hilang.
++- Tes renderer memeriksa dimensi output, poster tidak kosong, foto sumber tidak berubah, serta panel tidak saling menimpa atau keluar area. Ini tidak membuktikan semua teks panjang di setiap kombinasi selalu ideal; tetap periksa preview untuk materi publikasi.
++- Pemeriksaan visual sampel satu produk dengan nama/harga/promo.
++- Smoke test halaman dan API upload → generate → download → delete dijalankan pada lingkungan Linux. Pengujian Windows 11 dan model Ollama pengguna belum dilakukan.
++
++## Urutan lanjutan
++
++Fase 4: pipeline foto turunan non-destruktif (original tetap tersedia), background removal lokal opsional, enhancement ringan, pengaturan cahaya/bayangan, preview sebelum/sesudah, fallback jika model tidak terpasang. Setelah itu fase 5 batch variasi, fase 6 dokumen layer/editor, fase 7 Brand Kit dan Content Studio, fase 8 ekspor dan pengujian akhir.
++
++Kualitas akhir dengan foto produk nyata tetap perlu ditinjau. Fase 3 menyediakan komposisi deterministik lokal; bukan generasi gambar AI dan belum menjamin mutu setara kampanye brand untuk semua input.
+diff --git a/lib/promo-options.ts b/lib/promo-options.ts
+index 070339b..bfe16d7 100644
+--- a/lib/promo-options.ts
++++ b/lib/promo-options.ts
+@@ -1,3 +1,12 @@
++export const PROMO_STYLES = [
++  { id: "premium", label: "Premium Minimalist", hint: "Ruang lega, fokus produk, harga terpisah." },
++  { id: "flash", label: "Flash Sale", hint: "Kontras tinggi dengan produk unggulan besar." },
++  { id: "frozen", label: "Modern Frozen Food", hint: "Nuansa dingin dengan panel produk bersih." },
++  { id: "editorial", label: "Editorial Creative", hint: "Komposisi asimetris dan aksen editorial." },
++  { id: "retail", label: "Modern Retail", hint: "Grid katalog rapi untuk banyak produk." },
++  { id: "spotlight", label: "Product Spotlight", hint: "Panggung produk dengan susunan bertingkat." },
++] as const;
++
+ export const MAX_PROMO_ITEMS = 6;
+ 
+ export const PROMO_FORMATS = [
+@@ -69,8 +78,10 @@ export type PromoParams = {
+ };
+ 
+ export function parseAmount(s: string): number | null {
+-  const d = (s ?? "").replace(/\D/g, "");
+-  return d ? Number(d) : null;
++  const text = (s ?? "").trim().replace(/^Rp\s*/i, "");
++  if (!/^(?:\d+|\d{1,3}(?:[.,]\d{3})+)$/.test(text)) return null;
++  const n = Number(text.replace(/[.,]/g, ""));
++  return Number.isSafeInteger(n) && n > 0 ? n : null;
+ }
+ 
+ export function formatRupiah(n: number): string {
+@@ -85,7 +96,7 @@ function show(s: string): string {
+ }
+ 
+ function roundNice(n: number): number {
+-  return n >= 1000 ? Math.round(n / 100) * 100 : Math.round(n);
++  return Math.round(n); // Hanya pembulatan rupiah, tidak ke ratusan.
+ }
+ 
+ export type Computed =
+@@ -104,6 +115,10 @@ export function computeItem(
+   if (type === "harga_spesial") {
+     const a = parseAmount(priceT);
+     const b = parseAmount(oldPrice ?? "");
++    if (a == null) return { ok: false, error: "Harga promo harus berupa nominal rupiah positif (contoh 25000)." };
++    if ((oldPrice ?? "").trim() && (b == null || b <= a)) {
++      return { ok: false, error: "Harga normal harus lebih besar dari harga promo." };
++    }
+     let tag = "";
+     if (a && b && b > a) {
+       const pct = Math.round(((b - a) / b) * 100);
+@@ -119,6 +134,7 @@ export function computeItem(
+ 
+   const n = parseAmount(priceT);
+   if (type === "beli_gratis") {
++    if (!n) return { ok: false, error: "Harga harus berupa angka positif." };
+     return {
+       ok: true,
+       priceText: show(priceT),
+diff --git a/lib/promo.ts b/lib/promo.ts
+index 3371205..5fa5014 100644
+--- a/lib/promo.ts
++++ b/lib/promo.ts
+@@ -23,6 +23,7 @@ export type PromoSpec = {
+   format: string;
+   theme: string;
+   seed: number;
++  style?: string;
+   mode: "items" | "bundle";
+   title: string;
+   subtitle: string;
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..cb94939
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1 @@
++Pillow>=10.1,<13
+diff --git a/scripts/compose_promo.py b/scripts/compose_promo.py
+index 151500b..e602935 100644
+--- a/scripts/compose_promo.py
++++ b/scripts/compose_promo.py
+@@ -4,6 +4,7 @@ import random
+ import sys
+ 
+ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
++from creative_layout import plan as creative_plan, STYLES
+ 
+ Image.MAX_IMAGE_PIXELS = 100_000_000
+ 
+@@ -28,10 +29,10 @@ PLANS = {
+     "square": {1: [1], 2: [2], 3: [2, 1], 4: [2, 2], 5: [3, 2], 6: [3, 3]},
+     "story": {1: [1], 2: [1, 1], 3: [1, 1, 1], 4: [2, 2], 5: [2, 2, 1], 6: [2, 2, 2]},
+ }
+-F_IMPACT = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf"]
+-F_BLACK = ["C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf"]
+-F_BOLD = ["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "arialbd.ttf"]
+-F_REG = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "arial.ttf"]
++F_IMPACT = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
++F_BLACK = ["C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
++F_BOLD = ["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
++F_REG = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+ TITLE_FONTS = [F_IMPACT, F_BLACK, F_BOLD]
+ 
+ NAME_COLOR = (30, 41, 59)
+@@ -187,8 +188,13 @@ def draw_tag(d, x, y, w, h, text, st, pad):
+ 
+ def draw_text_block(d, x, y, w, h, item, st, centered, stack):
+     nf_size = max(16, min(40, int(h * 0.14)))
++    max_lines = 3 if st.get("hero") else 2
+     nf = load_font(F_BOLD, nf_size)
+-    lines = wrap(d, item["name"], nf, w, 2)
++    lines = wrap(d, item["name"], nf, w, max_lines)
++    while " ".join(lines) != " ".join(item["name"].split()) and nf_size > 12:
++        nf_size -= 2
++        nf = load_font(F_BOLD, nf_size)
++        lines = wrap(d, item["name"], nf, w, max_lines)
+     line_h = int(nf_size * 1.2)
+ 
+     price = item.get("price_text") or ""
+@@ -236,9 +242,28 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+     if st["card"] == "outline":
+         d.rounded_rectangle([x, y, x + w, y + h], radius=radius, outline=st["accent"], width=6)
+     pad = int(min(w, h) * 0.05)
+-    horizontal = w > h * 1.3 and show_price
+-
+-    if horizontal:
++    horizontal = (w > h * 1.3 or (st.get("style") == "premium" and w > h)) and show_price
++
++    hero = st.get("hero", False)
++    concept = st.get("style")
++    if hero and concept in ("premium", "editorial"):
++        # Split spread, with a large photograph and an independent price column.
++        iw = int(w * (.53 if concept == "premium" else .60))
++        box = (x + pad, y + pad, iw - pad, h - 2 * pad)
++        tx, ty, tw, th = x + iw + pad, y + int(h * .28), w - iw - 2 * pad, int(h * .55)
++        if concept == "editorial":
++            box = (x + w - iw, y + pad, iw - pad, h - 2 * pad)
++            tx, tw = x + pad, w - iw - 2 * pad
++        centered, stack = False, False
++    elif hero and concept == "spotlight":
++        box = (x + pad, y + pad, w - 2 * pad, int(h * .65))
++        tx, ty, tw, th = x + pad, y + int(h * .72), w - 2 * pad, int(h * .25)
++        centered, stack = True, True
++    elif hero and concept == "flash":
++        box = (x + int(w * .27), y + pad, int(w * .68), int(h * .60))
++        tx, ty, tw, th = x + pad, y + int(h * .69), w - 2 * pad, int(h * .28)
++        centered, stack = False, True
++    elif horizontal:
+         side = h - 2 * pad
+         box = (x + pad, y + pad, side, side)
+         tx, ty, tw, th = x + h, y + pad, w - h - pad, h - 2 * pad
+@@ -254,8 +279,8 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
+     try:
+         im = ImageOps.contain(load_product(item["path"]), (box[2], box[3]), Image.Resampling.LANCZOS)
+         canvas.paste(im, (box[0] + (box[2] - im.width) // 2, box[1] + (box[3] - im.height) // 2))
+-    except Exception:
+-        pass
++    except Exception as exc:
++        raise ValueError("Foto produk gagal dibaca") from exc
+ 
+     draw_text_block(d, tx, ty, tw, th, item, st, centered, stack)
+ 
+@@ -310,6 +335,9 @@ def main():
+ 
+     fmt = spec["format"]
+     W, H = FORMATS[fmt]
++    style = spec.get("style", "retail")
++    if style not in STYLES:
++        raise ValueError("Konsep tidak valid")
+     theme = spec["theme"]
+     if theme not in THEMES:
+         theme = rng.choice(list(THEMES))
+@@ -327,11 +355,31 @@ def main():
+         "tfont": rng.choice(TITLE_FONTS),
+     }
+ 
+-    base = gradient((W, H), c1, c2, st["grad"]).convert("RGBA")
+-    canvas = decorate(base, W, H, st["deco"], rng)
++    st["style"] = style
++    # Art direction is selected by concept, not randomized decoration.
++    directions = {
++        "premium": ((247, 245, 240), (235, 232, 225), "plain", "rect", .015),
++        "flash": (c1, c2, "ribbon", "tag", .025),
++        "frozen": ((225, 246, 252), (181, 222, 240), "plain", "pill", .09),
++        "editorial": ((239, 235, 228), (215, 208, 197), "underline", "rect", .005),
++        "retail": (c1, c2, "plain", "rect", .04),
++        "spotlight": ((24, 32, 48), (44, 57, 75), "plain", "pill", .12),
++    }
++    bg1, bg2, st["head"], st["pill"], st["radius"] = directions[style]
++    st["card"] = "round"
++    st["tfont"] = F_REG if style == "premium" else F_BOLD if style in ("frozen", "editorial") else F_IMPACT
++    canvas = gradient((W, H), bg1, bg2, "v").convert("RGBA")
++    if style == "flash":
++        canvas = decorate(canvas, W, H, "rays", rng)
++    elif style == "editorial":
++        ImageDraw.Draw(canvas).polygon([(W * .65, 0), (W, 0), (W, H * .8), (W * .88, H)], fill=c1)
++    elif style == "frozen":
++        ImageDraw.Draw(canvas).ellipse([int(-W*.3), int(H*.35), int(W*1.3), int(H*1.3)], fill=(243, 252, 255))
++    header_color = c2 if style in ("premium", "frozen", "editorial") else WHITE
+ 
+     items = spec["items"]
+     n = len(items)
++    st["hero"] = n == 1
+     bundle = spec.get("bundle") if spec.get("mode") == "bundle" else None
+     landscape = W > H
+     margin = int(W * 0.05)
+@@ -351,20 +399,9 @@ def main():
+     if bundle:
+         panel_h = int(H * (0.30 if landscape else 0.17))
+ 
+-    plan = [n] if landscape else PLANS[fmt][n]
+-    rows, maxcols = len(plan), max(plan)
+     grid_top = header_h
+     grid_h = H - bottom_margin - grid_top - (panel_h + gap if bundle else 0)
+-    cw = (W - 2 * margin - (maxcols - 1) * gap) // maxcols
+-    ch = (grid_h - (rows - 1) * gap) // rows
+-
+-    rects = []
+-    for r, cols in enumerate(plan):
+-        row_w = cols * cw + (cols - 1) * gap
+-        x0 = margin + ((W - 2 * margin) - row_w) // 2
+-        y0 = grid_top + r * (ch + gap)
+-        for c in range(cols):
+-            rects.append((x0 + c * (cw + gap), y0, cw, ch))
++    rects = creative_plan(style, (margin, grid_top, W - 2 * margin, grid_h), n, landscape)
+ 
+     sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+     sd = ImageDraw.Draw(sh)
+@@ -392,17 +429,17 @@ def main():
+             padx = int(tf.size * 0.5)
+             d.rounded_rectangle([(W - tw) / 2 - padx, ty0 - pady, (W + tw) / 2 + padx, ty0 + th + pady],
+                                 radius=(th + 2 * pady) // 4, fill=c2, outline=accent, width=5)
+-            d.text((tx, ty), title, font=tf, fill=WHITE)
++            d.text((tx, ty), title, font=tf, fill=header_color)
+             sub_y = ty0 + th + int(tf.size * 0.45)
+         elif head == "underline":
+-            d.text((tx + 4, ty + 5), title, font=tf, fill=(0, 0, 0, 90))
+-            d.text((tx, ty), title, font=tf, fill=WHITE)
++            d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
++            d.text((tx, ty), title, font=tf, fill=header_color)
+             bar_y = ty0 + th + int(tf.size * 0.14)
+             d.rounded_rectangle([(W - tw) / 2, bar_y, (W + tw) / 2, bar_y + 8], radius=4, fill=accent)
+             sub_y = ty0 + th + int(tf.size * 0.32)
+         else:
+-            d.text((tx + 4, ty + 5), title, font=tf, fill=(0, 0, 0, 90))
+-            d.text((tx, ty), title, font=tf, fill=WHITE)
++            d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
++            d.text((tx, ty), title, font=tf, fill=header_color)
+             sub_y = ty0 + th + int(tf.size * 0.25)
+ 
+         if subtitle:
+diff --git a/scripts/creative_layout.py b/scripts/creative_layout.py
+new file mode 100644
+index 0000000..2eb1617
+--- /dev/null
++++ b/scripts/creative_layout.py
+@@ -0,0 +1,48 @@
++"""Deterministic composition planning. All rectangles remain inside the content area."""
++import math
++
++STYLES = ("premium", "flash", "frozen", "editorial", "retail", "spotlight")
++
++
++def grid(x, y, w, h, count, columns, gap):
++    rows = math.ceil(count / columns)
++    cw, ch = (w - gap * (columns - 1)) / columns, (h - gap * (rows - 1)) / rows
++    return [(int(x + (i % columns) * (cw + gap)),
++             int(y + (i // columns) * (ch + gap)), int(cw), int(ch))
++            for i in range(count)]
++
++
++def plan(style, area, count, landscape=False):
++    if style not in STYLES or not 1 <= count <= 6:
++        raise ValueError("Konsep atau jumlah produk tidak valid")
++    x, y, w, h = area
++    gap = max(12, int(w * .025))
++    if count == 1:
++        # Different internal image/text arrangements are applied by the renderer.
++        inset = {"premium": .06, "flash": 0, "frozen": .025,
++                 "editorial": .015, "retail": .04, "spotlight": .08}[style]
++        dx, dy = int(w * inset), int(h * inset)
++        return [(x + dx, y + dy, w - 2 * dx, h - 2 * dy)]
++    if style in ("flash", "editorial"):
++        # Feature a hero product, with supporting products in a separate rail.
++        split = .54 if style == "flash" else .43
++        hero_w = int((w - gap) * split)
++        rest_w = w - gap - hero_w
++        cols = math.ceil((count - 1) / 2) if landscape else (2 if count > 3 else 1)
++        hero = (x, y, hero_w, h)
++        rest = grid(x + hero_w + gap, y, rest_w, h, count - 1, cols, gap)
++        return [hero] + rest if style == "flash" else rest + [hero]
++    if style == "spotlight":
++        # Tiered composition: a centered upper row, wider lower row.
++        top = max(1, count // 2)
++        top_h = int((h - gap) * .53)
++        top_w = int(w * .84)
++        return (grid(x + (w - top_w) // 2, y, top_w, top_h, top, top, gap)
++                + grid(x, y + top_h + gap, w, h - top_h - gap,
++                       count - top, count - top, gap))
++    cols = (min(count, 3) if landscape else (2 if count > 1 else 1))
++    if style == "premium":
++        cols = min(count, 3) if landscape else (1 if count <= 3 else 2)
++    elif style == "frozen":
++        cols = min(count, 2) if landscape else (2 if count <= 4 else 3)
++    return grid(x, y, w, h, count, cols, gap)
+diff --git a/tests/promo-options.test.mjs b/tests/promo-options.test.mjs
+new file mode 100644
+index 0000000..0b06c04
+--- /dev/null
++++ b/tests/promo-options.test.mjs
+@@ -0,0 +1,24 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import ts from 'typescript';
++const source = fs.readFileSync(new URL('../lib/promo-options.ts', import.meta.url), 'utf8');
++const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
++const { parseAmount, computeItem, PROMO_STYLES } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
++const params = { discountPercent: 20, discountAmount: 5000, buyQty: 2, freeQty: 1, bundlePrice: '' };
++test('nominal rupiah tidak ditafsirkan dari teks ambigu', () => {
++  for (const s of ['25000', '25.000', 'Rp 25.000', '25,000']) assert.equal(parseAmount(s), 25000);
++  for (const s of ['25rb', '-25000', '1e6', '0', 'NaN', '1.23', '9007199254740992']) assert.equal(parseAmount(s), null);
++});
++test('diskon tidak dibulatkan diam-diam ke ratusan rupiah', () => {
++  assert.deepEqual(computeItem('diskon_persen', params, '30999', ''), {
++    ok: true, priceText: 'Rp24.799', oldText: 'Rp30.999', tag: '-20%',
++  });
++});
++test('harga manual tetap dan harga coret divalidasi', () => {
++  assert.equal(computeItem('harga_spesial', params, '24799', '30999').priceText, 'Rp24.799');
++  assert.equal(computeItem('harga_spesial', params, '25000', '20000').ok, false);
++  assert.equal(computeItem('harga_spesial', params, '25rb', '').ok, false);
++  assert.equal(computeItem('potongan_rp', params, '4000', '').ok, false);
++});
++test('enam konsep memiliki ID unik', () => assert.equal(new Set(PROMO_STYLES.map(s => s.id)).size, 6));
+diff --git a/tests/test_creative_layout.py b/tests/test_creative_layout.py
+new file mode 100644
+index 0000000..47347ed
+--- /dev/null
++++ b/tests/test_creative_layout.py
+@@ -0,0 +1,75 @@
++import itertools
++import json
++from pathlib import Path
++import subprocess
++import sys
++import tempfile
++import unittest
++
++from PIL import Image, ImageChops
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / 'scripts'))
++from creative_layout import plan, STYLES
++from compose_promo import FORMATS
++
++
++class CreativeLayoutTests(unittest.TestCase):
++    def test_bounds_and_nonoverlap(self):
++        for style, (fmt, (w, h)), n in itertools.product(STYLES, FORMATS.items(), range(1, 7)):
++            with self.subTest(style=style, format=fmt, count=n):
++                area = (54, int(h*.22), w-108, int(h*.62))
++                boxes = plan(style, area, n, w > h)
++                self.assertEqual(len(boxes), n)
++                for x, y, bw, bh in boxes:
++                    self.assertGreater(bw, 0)
++                    self.assertGreater(bh, 0)
++                    self.assertGreaterEqual(x, area[0])
++                    self.assertGreaterEqual(y, area[1])
++                    self.assertLessEqual(x+bw, area[0]+area[2])
++                    self.assertLessEqual(y+bh, area[1]+area[3])
++                for a, b in itertools.combinations(boxes, 2):
++                    self.assertTrue(a[0]+a[2] <= b[0] or b[0]+b[2] <= a[0]
++                                    or a[1]+a[3] <= b[1] or b[1]+b[3] <= a[1])
++
++    def test_compositions_differ_and_are_repeatable(self):
++        layouts = [plan(s, (50, 200, 980, 900), 6) for s in STYLES]
++        self.assertGreaterEqual(len({str(p) for p in layouts}), 5)
++        self.assertEqual(layouts[0], plan('premium', (50, 200, 980, 900), 6))
++
++    def test_render_all_formats_styles_and_modes(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            folder = Path(tmp)
++            source = folder / 'product.png'
++            Image.new('RGB', (300, 500), '#d62638').save(source)
++            original = source.read_bytes()
++            item = dict(path=str(source), name='Nugget Ayam Original 500 gram',
++                        price_text='Rp24.799', old_text='Rp30.999', tag='-20%')
++            for style, (fmt, dims), mode in itertools.product(STYLES, FORMATS.items(), ('items', 'bundle')):
++                with self.subTest(style=style, format=fmt, mode=mode):
++                    spec = dict(format=fmt, style=style, theme='merah', seed=42,
++                                mode=mode, title='PROMO AKHIR PEKAN', subtitle='Berlaku 1–7 November',
++                                footer='ANTOFROZEN • Pesan via WhatsApp', badge='PROMO',
++                                items=[item] if mode == 'items' else [dict(item, price_text='', old_text='', tag='')]*6,
++                                bundle=dict(label='PAKET HEMAT', price_text='Rp125.000', old_text='Rp150.000', tag='HEMAT Rp25.000'))
++                    infile, outfile = folder/'spec.json', folder/'poster.jpg'
++                    infile.write_text(json.dumps(spec), encoding='utf-8')
++                    subprocess.run([sys.executable, str(ROOT/'scripts/compose_promo.py'), str(infile), str(outfile)],
++                                   check=True, capture_output=True)
++                    with Image.open(outfile) as im:
++                        self.assertEqual(im.size, dims)
++                        self.assertIsNotNone(ImageChops.difference(im, Image.new('RGB', dims, im.getpixel((0, 0)))).getbbox())
++            self.assertEqual(source.read_bytes(), original)
++
++    def test_missing_photo_fails_instead_of_blank_poster(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            folder = Path(tmp)
++            spec = dict(format='feed', style='retail', theme='merah', items=[dict(path='missing.png', name='Produk')])
++            (folder/'spec.json').write_text(json.dumps(spec))
++            result = subprocess.run([sys.executable, str(ROOT/'scripts/compose_promo.py'), str(folder/'spec.json'), str(folder/'out.jpg')], capture_output=True)
++            self.assertNotEqual(result.returncode, 0)
++            self.assertFalse((folder/'out.jpg').exists())
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.51.1
+

@@ -4,6 +4,7 @@ import random
 import sys
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from creative_layout import plan as creative_plan, STYLES
 
 Image.MAX_IMAGE_PIXELS = 100_000_000
 
@@ -28,10 +29,10 @@ PLANS = {
     "square": {1: [1], 2: [2], 3: [2, 1], 4: [2, 2], 5: [3, 2], 6: [3, 3]},
     "story": {1: [1], 2: [1, 1], 3: [1, 1, 1], 4: [2, 2], 5: [2, 2, 1], 6: [2, 2, 2]},
 }
-F_IMPACT = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf"]
-F_BLACK = ["C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf"]
-F_BOLD = ["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "arialbd.ttf"]
-F_REG = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "arial.ttf"]
+F_IMPACT = ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+F_BLACK = ["C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf", "arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+F_BOLD = ["C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf", "arialbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+F_REG = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 TITLE_FONTS = [F_IMPACT, F_BLACK, F_BOLD]
 
 NAME_COLOR = (30, 41, 59)
@@ -187,8 +188,13 @@ def draw_tag(d, x, y, w, h, text, st, pad):
 
 def draw_text_block(d, x, y, w, h, item, st, centered, stack):
     nf_size = max(16, min(40, int(h * 0.14)))
+    max_lines = 3 if st.get("hero") else 2
     nf = load_font(F_BOLD, nf_size)
-    lines = wrap(d, item["name"], nf, w, 2)
+    lines = wrap(d, item["name"], nf, w, max_lines)
+    while " ".join(lines) != " ".join(item["name"].split()) and nf_size > 12:
+        nf_size -= 2
+        nf = load_font(F_BOLD, nf_size)
+        lines = wrap(d, item["name"], nf, w, max_lines)
     line_h = int(nf_size * 1.2)
 
     price = item.get("price_text") or ""
@@ -236,9 +242,28 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
     if st["card"] == "outline":
         d.rounded_rectangle([x, y, x + w, y + h], radius=radius, outline=st["accent"], width=6)
     pad = int(min(w, h) * 0.05)
-    horizontal = w > h * 1.3 and show_price
+    horizontal = (w > h * 1.3 or (st.get("style") == "premium" and w > h)) and show_price
 
-    if horizontal:
+    hero = st.get("hero", False)
+    concept = st.get("style")
+    if hero and concept in ("premium", "editorial"):
+        # Split spread, with a large photograph and an independent price column.
+        iw = int(w * (.53 if concept == "premium" else .60))
+        box = (x + pad, y + pad, iw - pad, h - 2 * pad)
+        tx, ty, tw, th = x + iw + pad, y + int(h * .28), w - iw - 2 * pad, int(h * .55)
+        if concept == "editorial":
+            box = (x + w - iw, y + pad, iw - pad, h - 2 * pad)
+            tx, tw = x + pad, w - iw - 2 * pad
+        centered, stack = False, False
+    elif hero and concept == "spotlight":
+        box = (x + pad, y + pad, w - 2 * pad, int(h * .65))
+        tx, ty, tw, th = x + pad, y + int(h * .72), w - 2 * pad, int(h * .25)
+        centered, stack = True, True
+    elif hero and concept == "flash":
+        box = (x + int(w * .27), y + pad, int(w * .68), int(h * .60))
+        tx, ty, tw, th = x + pad, y + int(h * .69), w - 2 * pad, int(h * .28)
+        centered, stack = False, True
+    elif horizontal:
         side = h - 2 * pad
         box = (x + pad, y + pad, side, side)
         tx, ty, tw, th = x + h, y + pad, w - h - pad, h - 2 * pad
@@ -254,8 +279,8 @@ def draw_card(canvas, d, x, y, w, h, item, st, badge, show_price):
     try:
         im = ImageOps.contain(load_product(item["path"]), (box[2], box[3]), Image.Resampling.LANCZOS)
         canvas.paste(im, (box[0] + (box[2] - im.width) // 2, box[1] + (box[3] - im.height) // 2))
-    except Exception:
-        pass
+    except Exception as exc:
+        raise ValueError("Foto produk gagal dibaca") from exc
 
     draw_text_block(d, tx, ty, tw, th, item, st, centered, stack)
 
@@ -310,6 +335,9 @@ def main():
 
     fmt = spec["format"]
     W, H = FORMATS[fmt]
+    style = spec.get("style", "retail")
+    if style not in STYLES:
+        raise ValueError("Konsep tidak valid")
     theme = spec["theme"]
     if theme not in THEMES:
         theme = rng.choice(list(THEMES))
@@ -327,11 +355,31 @@ def main():
         "tfont": rng.choice(TITLE_FONTS),
     }
 
-    base = gradient((W, H), c1, c2, st["grad"]).convert("RGBA")
-    canvas = decorate(base, W, H, st["deco"], rng)
+    st["style"] = style
+    # Art direction is selected by concept, not randomized decoration.
+    directions = {
+        "premium": ((247, 245, 240), (235, 232, 225), "plain", "rect", .015),
+        "flash": (c1, c2, "ribbon", "tag", .025),
+        "frozen": ((225, 246, 252), (181, 222, 240), "plain", "pill", .09),
+        "editorial": ((239, 235, 228), (215, 208, 197), "underline", "rect", .005),
+        "retail": (c1, c2, "plain", "rect", .04),
+        "spotlight": ((24, 32, 48), (44, 57, 75), "plain", "pill", .12),
+    }
+    bg1, bg2, st["head"], st["pill"], st["radius"] = directions[style]
+    st["card"] = "round"
+    st["tfont"] = F_REG if style == "premium" else F_BOLD if style in ("frozen", "editorial") else F_IMPACT
+    canvas = gradient((W, H), bg1, bg2, "v").convert("RGBA")
+    if style == "flash":
+        canvas = decorate(canvas, W, H, "rays", rng)
+    elif style == "editorial":
+        ImageDraw.Draw(canvas).polygon([(W * .65, 0), (W, 0), (W, H * .8), (W * .88, H)], fill=c1)
+    elif style == "frozen":
+        ImageDraw.Draw(canvas).ellipse([int(-W*.3), int(H*.35), int(W*1.3), int(H*1.3)], fill=(243, 252, 255))
+    header_color = c2 if style in ("premium", "frozen", "editorial") else WHITE
 
     items = spec["items"]
     n = len(items)
+    st["hero"] = n == 1
     bundle = spec.get("bundle") if spec.get("mode") == "bundle" else None
     landscape = W > H
     margin = int(W * 0.05)
@@ -351,20 +399,9 @@ def main():
     if bundle:
         panel_h = int(H * (0.30 if landscape else 0.17))
 
-    plan = [n] if landscape else PLANS[fmt][n]
-    rows, maxcols = len(plan), max(plan)
     grid_top = header_h
     grid_h = H - bottom_margin - grid_top - (panel_h + gap if bundle else 0)
-    cw = (W - 2 * margin - (maxcols - 1) * gap) // maxcols
-    ch = (grid_h - (rows - 1) * gap) // rows
-
-    rects = []
-    for r, cols in enumerate(plan):
-        row_w = cols * cw + (cols - 1) * gap
-        x0 = margin + ((W - 2 * margin) - row_w) // 2
-        y0 = grid_top + r * (ch + gap)
-        for c in range(cols):
-            rects.append((x0 + c * (cw + gap), y0, cw, ch))
+    rects = creative_plan(style, (margin, grid_top, W - 2 * margin, grid_h), n, landscape)
 
     sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     sd = ImageDraw.Draw(sh)
@@ -392,17 +429,17 @@ def main():
             padx = int(tf.size * 0.5)
             d.rounded_rectangle([(W - tw) / 2 - padx, ty0 - pady, (W + tw) / 2 + padx, ty0 + th + pady],
                                 radius=(th + 2 * pady) // 4, fill=c2, outline=accent, width=5)
-            d.text((tx, ty), title, font=tf, fill=WHITE)
+            d.text((tx, ty), title, font=tf, fill=header_color)
             sub_y = ty0 + th + int(tf.size * 0.45)
         elif head == "underline":
-            d.text((tx + 4, ty + 5), title, font=tf, fill=(0, 0, 0, 90))
-            d.text((tx, ty), title, font=tf, fill=WHITE)
+            d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
+            d.text((tx, ty), title, font=tf, fill=header_color)
             bar_y = ty0 + th + int(tf.size * 0.14)
             d.rounded_rectangle([(W - tw) / 2, bar_y, (W + tw) / 2, bar_y + 8], radius=4, fill=accent)
             sub_y = ty0 + th + int(tf.size * 0.32)
         else:
-            d.text((tx + 4, ty + 5), title, font=tf, fill=(0, 0, 0, 90))
-            d.text((tx, ty), title, font=tf, fill=WHITE)
+            d.text((tx + 2, ty + 2), title, font=tf, fill=(0, 0, 0, 15))
+            d.text((tx, ty), title, font=tf, fill=header_color)
             sub_y = ty0 + th + int(tf.size * 0.25)
 
         if subtitle:

@@ -1,3 +1,12 @@
+export const PROMO_STYLES = [
+  { id: "premium", label: "Premium Minimalist", hint: "Ruang lega, fokus produk, harga terpisah." },
+  { id: "flash", label: "Flash Sale", hint: "Kontras tinggi dengan produk unggulan besar." },
+  { id: "frozen", label: "Modern Frozen Food", hint: "Nuansa dingin dengan panel produk bersih." },
+  { id: "editorial", label: "Editorial Creative", hint: "Komposisi asimetris dan aksen editorial." },
+  { id: "retail", label: "Modern Retail", hint: "Grid katalog rapi untuk banyak produk." },
+  { id: "spotlight", label: "Product Spotlight", hint: "Panggung produk dengan susunan bertingkat." },
+] as const;
+
 export const MAX_PROMO_ITEMS = 6;
 
 export const PROMO_FORMATS = [
@@ -69,8 +78,10 @@ export type PromoParams = {
 };
 
 export function parseAmount(s: string): number | null {
-  const d = (s ?? "").replace(/\D/g, "");
-  return d ? Number(d) : null;
+  const text = (s ?? "").trim().replace(/^Rp\s*/i, "");
+  if (!/^(?:\d+|\d{1,3}(?:[.,]\d{3})+)$/.test(text)) return null;
+  const n = Number(text.replace(/[.,]/g, ""));
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 export function formatRupiah(n: number): string {
@@ -85,7 +96,7 @@ function show(s: string): string {
 }
 
 function roundNice(n: number): number {
-  return n >= 1000 ? Math.round(n / 100) * 100 : Math.round(n);
+  return Math.round(n); // Hanya pembulatan rupiah, tidak ke ratusan.
 }
 
 export type Computed =
@@ -104,6 +115,10 @@ export function computeItem(
   if (type === "harga_spesial") {
     const a = parseAmount(priceT);
     const b = parseAmount(oldPrice ?? "");
+    if (a == null) return { ok: false, error: "Harga promo harus berupa nominal rupiah positif (contoh 25000)." };
+    if ((oldPrice ?? "").trim() && (b == null || b <= a)) {
+      return { ok: false, error: "Harga normal harus lebih besar dari harga promo." };
+    }
     let tag = "";
     if (a && b && b > a) {
       const pct = Math.round(((b - a) / b) * 100);
@@ -119,6 +134,7 @@ export function computeItem(
 
   const n = parseAmount(priceT);
   if (type === "beli_gratis") {
+    if (!n) return { ok: false, error: "Harga harus berupa angka positif." };
     return {
       ok: true,
       priceText: show(priceT),

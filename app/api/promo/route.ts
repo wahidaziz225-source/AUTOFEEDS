@@ -4,6 +4,7 @@ import { getDb, logActivity } from "@/lib/db";
 import {
   MAX_PROMO_ITEMS,
   PROMO_FORMATS,
+  PROMO_STYLES,
   PROMO_THEMES,
   PROMO_TYPES,
   computeItem,
@@ -32,6 +33,8 @@ export async function POST(req: Request) {
     const format = clean(body.format, 20);
     const theme = clean(body.theme, 20);
     const type = clean(body.promo_type, 20);
+    const style = clean(body.style ?? "retail", 20);
+    if (!PROMO_STYLES.some((s) => s.id === style)) return bad("Konsep desain tidak valid.");
 
     if (!PROMO_FORMATS.some((f) => f.id === format)) return bad("Ukuran tidak valid.");
     if (!PROMO_THEMES.some((t) => t.id === theme)) return bad("Tema tidak valid.");
@@ -71,6 +74,9 @@ export async function POST(req: Request) {
     const normals: (number | null)[] = [];
 
     for (const r of rawItems) {
+      if (!r || typeof r !== "object" || !Number.isSafeInteger(Number(r.image_id)) || Number(r.image_id) <= 0) {
+        return bad("Data produk tidak valid.");
+      }
       const row = db
         .prepare("SELECT name, stored_filename FROM images WHERE id = ?")
         .get(Number(r.image_id)) as { name: string; stored_filename: string } | undefined;
@@ -115,6 +121,7 @@ export async function POST(req: Request) {
       format,
       theme,
       seed,
+      style,
       mode: type === "bundling" ? "bundle" : "items",
       title,
       subtitle: clean(body.subtitle, 80),
@@ -136,6 +143,7 @@ export async function POST(req: Request) {
         theme,
         JSON.stringify({
           promo_type: type,
+          style,
           seed,
           items: items.map((i) => ({
             name: i.name,

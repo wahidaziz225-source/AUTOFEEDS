@@ -6,6 +6,7 @@ import { Loader2, Wand2, Download, Trash2, AlertCircle, X, Shuffle } from "lucid
 import {
   MAX_PROMO_ITEMS,
   PROMO_FORMATS,
+  PROMO_STYLES,
   PROMO_THEMES,
   PROMO_TYPES,
   computeItem,
@@ -35,6 +36,7 @@ export default function PromoPage() {
   const [footer, setFooter] = useState("");
   const [badge, setBadge] = useState("PROMO");
   const [format, setFormat] = useState("feed");
+  const [style, setStyle] = useState("retail");
   const [theme, setTheme] = useState("acak");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -134,6 +136,7 @@ export default function PromoPage() {
           badge,
           format,
           theme,
+          style,
           items: sel.map((s) => ({
             image_id: s.imageId,
             name: s.name,
@@ -176,7 +179,7 @@ export default function PromoPage() {
       <header>
         <h1 className="text-2xl font-bold text-slate-900">Promo Composer</h1>
         <p className="text-sm text-slate-500">
-          Pilih jenis promo dan sampai {MAX_PROMO_ITEMS} produk. Setiap generate menghasilkan tampilan yang berbeda.
+          Pilih jenis promo dan sampai {MAX_PROMO_ITEMS} produk. Pilih satu dari enam konsep komposisi. Foto asli dan informasi produk tetap digunakan.
         </p>
       </header>
 
@@ -375,12 +378,25 @@ export default function PromoPage() {
               </ul>
             )}
             <p className="text-xs text-slate-400">
-              Angka saja otomatis jadi format rupiah (25000 menjadi Rp25.000). Hasil diskon persen dibulatkan ke Rp100 terdekat.
+              Angka saja otomatis jadi format rupiah (25000 menjadi Rp25.000). Hasil diskon persen dibulatkan ke rupiah terdekat.
             </p>
           </div>
 
           <div className="space-y-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <h2 className="text-sm font-semibold text-slate-900">4. Teks dan tampilan</h2>
+            <fieldset>
+              <legend className="mb-2 text-xs font-medium text-slate-500">Konsep desain</legend>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {PROMO_STYLES.map((s) => (
+                  <button key={s.id} type="button" aria-pressed={style === s.id}
+                    onClick={() => setStyle(s.id)}
+                    className={`rounded-xl border p-3 text-left ${style === s.id ? "border-indigo-600 bg-indigo-50" : "border-slate-200"}`}>
+                    <span className="block text-sm font-semibold">{s.label}</span>
+                    <span className="text-xs text-slate-500">{s.hint}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="text-xs font-medium text-slate-500">
                 Judul

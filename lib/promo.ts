@@ -23,6 +23,7 @@ export type PromoSpec = {
   format: string;
   theme: string;
   seed: number;
+  style?: string;
   mode: "items" | "bundle";
   title: string;
   subtitle: string;

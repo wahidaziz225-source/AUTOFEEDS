@@ -1,0 +1,7 @@
+Paket pembaruan Fase 3 untuk baseline f8159df.
+Backup folder proyek, database dan storage terlebih dahulu.
+Ekstrak paket, lalu salin file sesuai struktur folder ke proyek AUTOFEEDS Anda.
+Alternatif pengguna Git: git apply --check AUTOFEEDS-fase3.patch lalu git apply AUTOFEEDS-fase3.patch
+Jalankan npm ci dan python -m pip install -r requirements.txt, lalu npm run dev.
+Lihat docs/AUDIT-FASE-3.md untuk audit dan batas implementasi.
+Paket ini berisi file perubahan, bukan aplikasi lengkap.
