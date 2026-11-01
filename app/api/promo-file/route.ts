@@ -28,5 +28,5 @@ export async function GET(req: Request) {
   if (url.searchParams.get("download") === "1") {
     headers["Content-Disposition"] = `attachment; filename="promo-${id}.${format}"`;
   }
-  return new Response(new Uint8Array(fs.readFileSync(p)), { headers });
+  return new Response(new Uint8Array(await fs.promises.readFile(p)), { headers });
 }

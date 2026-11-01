@@ -255,7 +255,7 @@ export default function LibraryPage() {
                 className="flex flex-col gap-4 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200 sm:flex-row"
               >
                 <img
-                  src={`/api/image-file?id=${item.image_id}`}
+                  src={`/api/image-file?id=${item.image_id}&size=small`}
                   alt={item.image_name}
                   loading="lazy"
                   className="h-40 w-full shrink-0 rounded-xl object-cover sm:w-40"

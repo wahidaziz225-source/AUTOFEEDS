@@ -316,7 +316,7 @@ export default function UploadPage() {
                 className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
               >
                 <img
-                  src={`/api/image-file?id=${img.id}`}
+                  src={`/api/image-file?id=${img.id}&size=small`}
                   alt={img.name}
                   loading="lazy"
                   className="h-44 w-full object-cover"

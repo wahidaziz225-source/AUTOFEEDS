@@ -309,7 +309,7 @@ export default function PromoPage() {
                     }`}
                   >
                     <img
-                      src={`/api/image-file?id=${img.id}`}
+                      src={`/api/image-file?id=${img.id}&size=small`}
                       alt={img.name}
                       loading="lazy"
                       className="h-24 w-full object-cover"
