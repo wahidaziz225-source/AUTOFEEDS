@@ -91,8 +91,11 @@ def remove_background(image):
             raise ProcessingError('AI tidak menemukan mask produk yang dapat digunakan.', 'MASK_FAILED')
         alpha = Image.fromarray(np.uint8(np.clip((prediction-low)/(high-low), 0, 1)*255))
         alpha = alpha.resize(image.size, Image.Resampling.LANCZOS)
-        result = image.copy()
-        result.putalpha(ImageChops.multiply(image.getchannel('A'), alpha))
+        result = image.convert('RGBA')
+        if 'A' in image.getbands():
+            result.putalpha(ImageChops.multiply(image.getchannel('A'), alpha))
+        else:
+            result.putalpha(alpha)
         return result
     except ProcessingError:
         raise

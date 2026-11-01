@@ -7,6 +7,8 @@ import {
   ScanSearch,
   Upload,
   Megaphone,
+  Zap,
+  ArrowRight,
 } from "lucide-react";
 import { getStats, getOllamaStatus } from "@/lib/stats";
 import { getSetting } from "@/lib/db";
@@ -77,6 +79,12 @@ export default async function DashboardPage() {
         actions={
           <>
             <Link
+              href="/express"
+              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-3.5 py-2 text-sm font-bold text-white shadow-sm hover:brightness-110"
+            >
+              <Zap size={16} className="fill-white" /> Express (Isi → Upload)
+            </Link>
+            <Link
               href="/upload"
               className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
             >
@@ -84,13 +92,37 @@ export default async function DashboardPage() {
             </Link>
             <Link
               href="/promo"
-              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 ring-1 ring-indigo-200 hover:bg-indigo-100"
             >
-              <Megaphone size={16} /> Buat promo
+              <Megaphone size={16} /> Promo Composer
             </Link>
           </>
         }
       />
+
+      {/* Auto Feeds Express Hero Card */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 p-6 sm:p-8 text-white shadow-xl ring-1 ring-white/10">
+        <div className="relative z-10 flex flex-col items-start justify-between gap-5 sm:flex-row sm:items-center">
+          <div className="space-y-1.5 max-w-2xl">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-400 px-2.5 py-0.5 text-xs font-black uppercase text-slate-950">
+              <Zap size={12} className="fill-slate-950" /> Alur Cepat
+            </span>
+            <h2 className="text-xl font-extrabold sm:text-2xl">
+              Auto Feeds Express: Isi Produk → Siap Upload
+            </h2>
+            <p className="text-sm text-slate-300">
+              Buat poster promosi visual resolusi tinggi dan caption Instagram persuasif lengkap dengan hashtag dalam hitungan detik.
+            </p>
+          </div>
+          <Link
+            href="/express"
+            className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 hover:brightness-110 px-5 py-3 text-sm font-bold text-white shadow-lg transition"
+          >
+            Mulai Express <ArrowRight size={16} />
+          </Link>
+        </div>
+        <div className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-indigo-500/20 blur-3xl" />
+      </div>
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total Gambar" value={stats.totalImages} icon={ImageIcon} />

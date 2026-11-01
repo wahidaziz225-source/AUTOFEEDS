@@ -21,6 +21,7 @@ import {
 
 type Img = { id: number; name: string };
 type Sel = { imageId: number; name: string; price: string; oldPrice: string; variantId: number | null };
+type FreeProduct = { imageId: number; name: string; variantId: number | null };
 type Design = { id: number; title: string; layout_format: string; created_at: string; batch_id: string | null; style: string | null; is_saved: number; can_regenerate: number };
 
 const inputCls =
@@ -39,6 +40,7 @@ export default function PromoPage() {
   const [amount, setAmount] = useState("");
   const [buyQty, setBuyQty] = useState("1");
   const [freeQty, setFreeQty] = useState("1");
+  const [freeProduct, setFreeProduct] = useState<FreeProduct | null>(null);
   const [bundlePrice, setBundlePrice] = useState("");
   const [title, setTitle] = useState("PROMO SPESIAL");
   const [subtitle, setSubtitle] = useState("");
@@ -104,9 +106,23 @@ export default function PromoPage() {
   function changeType(next: string) {
     setType(next);
     setError("");
+    if (next !== "beli_gratis") setFreeProduct(null);
     const defaults = PROMO_TYPES.map((t) => t.defaultTitle as string);
     if (defaults.includes(title)) {
       setTitle(PROMO_TYPES.find((t) => t.id === next)?.defaultTitle ?? title);
+    }
+  }
+
+  async function selectFreeProduct(imgId: number) {
+    const img = images.find(i => i.id === imgId);
+    if (!img) { setFreeProduct(null); return; }
+    setFreeProduct({ imageId: img.id, name: img.name, variantId: null });
+    if (!variants[img.id]) {
+      try {
+        const res = await fetch(`/api/image-processing?image_id=${img.id}`);
+        const data = await res.json();
+        if (res.ok) setVariants(current => ({ ...current, [img.id]: data.variants }));
+      } catch { /* silent */ }
     }
   }
 
@@ -135,7 +151,8 @@ export default function PromoPage() {
     if (type === "bundling" || !s.price.trim()) return "";
     const c = computeItem(type, params, s.price, s.oldPrice);
     if (!c.ok) return c.error;
-    return `${c.oldText ? c.oldText + " → " : ""}${c.priceText}${c.tag ? "  (" + c.tag + ")" : ""}`;
+    const tag = (type === "beli_gratis" && freeProduct) ? `BELI ${params.buyQty} (Gratis: ${freeProduct.name})` : c.tag;
+    return `${c.oldText ? c.oldText + " → " : ""}${c.priceText}${tag ? "  (" + tag + ")" : ""}`;
   }
 
   async function generate() {
@@ -162,6 +179,7 @@ export default function PromoPage() {
           discount_amount: amount,
           buy_qty: buyQty,
           free_qty: freeQty,
+          ...(type === "beli_gratis" && freeProduct ? { free_product: { image_id: freeProduct.imageId, variant_id: freeProduct.variantId, name: freeProduct.name } } : {}),
           bundle_price: bundlePrice,
           title,
           subtitle,
@@ -393,6 +411,52 @@ export default function PromoPage() {
                       className={inputCls}
                     />
                   </label>
+                  <label className="text-xs font-medium text-slate-500 sm:col-span-3">
+                    Produk gratis (opsional)
+                    <select
+                      value={freeProduct?.imageId ?? ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v) { setFreeProduct(null); return; }
+                        selectFreeProduct(Number(v));
+                      }}
+                      className={inputCls}
+                    >
+                      <option value="">Sama dengan produk utama</option>
+                      {images.map(img => <option key={img.id} value={img.id}>{img.name}</option>)}
+                    </select>
+                  </label>
+                  {freeProduct && (
+                    <div className="flex items-start gap-3 rounded-xl bg-indigo-50 p-3 sm:col-span-3">
+                      <img
+                        src={`/api/image-file?id=${freeProduct.imageId}${freeProduct.variantId ? `&variant_id=${freeProduct.variantId}` : "&size=small"}`}
+                        alt={freeProduct.name}
+                        className="h-16 w-16 shrink-0 rounded-lg object-cover"
+                      />
+                      <div className="flex-1 space-y-2">
+                        <label className="text-xs font-medium text-slate-500">
+                          Nama produk gratis
+                          <input
+                            value={freeProduct.name}
+                            maxLength={60}
+                            onChange={(e) => setFreeProduct({ ...freeProduct, name: e.target.value })}
+                            className={inputCls}
+                          />
+                        </label>
+                        <label className="text-xs font-medium text-slate-500">
+                          Foto untuk poster
+                          <select
+                            value={freeProduct.variantId ?? ""}
+                            className={inputCls}
+                            onChange={(e) => setFreeProduct({ ...freeProduct, variantId: e.target.value ? Number(e.target.value) : null })}
+                          >
+                            <option value="">Foto asli</option>
+                            {(variants[freeProduct.imageId] ?? []).map(v => <option key={v.id} value={v.id}>Hasil olahan #{v.id} · {v.width}×{v.height}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
               {type === "bundling" && (

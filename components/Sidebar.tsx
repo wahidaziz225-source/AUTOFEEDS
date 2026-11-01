@@ -31,6 +31,7 @@ const GROUPS: { title: string | null; items: Item[] }[] = [
   {
     title: "Alur kerja",
     items: [
+      { href: "/express", label: "Auto Feeds Express", icon: Zap },
       { href: "/upload", label: "Image Upload", icon: Upload },
       { href: "/image-studio", label: "Product Image Studio", icon: ImagePlus },
       { href: "/analyzer", label: "AI Image Analyzer", icon: ScanSearch },

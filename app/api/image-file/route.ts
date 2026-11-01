@@ -46,12 +46,23 @@ export async function GET(req: Request) {
     return new Response("File hilang", { status: 404 });
   }
 
+  const stat = await fs.promises.stat(filePath);
+  const etag = `"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
+
+  // Return 304 Not Modified if client already has this version
+  const ifNoneMatch = req.headers.get("if-none-match");
+  if (ifNoneMatch === etag) {
+    return new Response(null, { status: 304 });
+  }
+
   const data = await fs.promises.readFile(filePath);
   const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
   return new Response(new Uint8Array(data), {
     headers: {
       "Content-Type": mime,
+      "Content-Length": String(stat.size),
       "Cache-Control": "private, max-age=31536000, immutable",
+      "ETag": etag,
       "X-Content-Type-Options": "nosniff",
       ...(url.searchParams.get("download") === "1"
         ? {

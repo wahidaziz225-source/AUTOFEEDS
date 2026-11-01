@@ -21,15 +21,19 @@ export const PROMO_THEMES = [
   {
     id: "acak",
     label: "Acak (variatif)",
-    bg: "conic-gradient(#dc2626, #2563eb, #7c3aed, #16a34a, #f97316, #dc2626)",
+    bg: "conic-gradient(#be123c, #1d4ed8, #6d28d9, #15803d, #ea580c, #0f172a, #be123c)",
   },
-  { id: "merah", label: "Merah", bg: "#dc2626" },
-  { id: "biru", label: "Biru", bg: "#2563eb" },
-  { id: "ungu", label: "Ungu", bg: "#7c3aed" },
-  { id: "oranye", label: "Oranye", bg: "#f97316" },
-  { id: "hijau", label: "Hijau", bg: "#16a34a" },
-  { id: "pink", label: "Pink", bg: "#db2777" },
-  { id: "tosca", label: "Tosca", bg: "#0d9488" },
+  { id: "midnight", label: "Midnight Cyber", bg: "#0f172a" },
+  { id: "luxury_gold", label: "Royal Gold", bg: "#18181b" },
+  { id: "sunset", label: "Sunset Rose", bg: "#e11d48" },
+  { id: "emerald", label: "Emerald Fresh", bg: "#064e3b" },
+  { id: "merah", label: "Merah Ruby", bg: "#be123c" },
+  { id: "biru", label: "Biru Cobalt", bg: "#1d4ed8" },
+  { id: "ungu", label: "Ungu Royal", bg: "#6d28d9" },
+  { id: "oranye", label: "Oranye Sunset", bg: "#ea580c" },
+  { id: "hijau", label: "Hijau Jade", bg: "#15803d" },
+  { id: "pink", label: "Pink Mulberry", bg: "#be185d" },
+  { id: "tosca", label: "Tosca Ocean", bg: "#0f766e" },
 ] as const;
 
 export const PROMO_TYPES = [

@@ -120,6 +120,44 @@ export async function POST(req: Request) {
     const items: PromoSpecItem[] = [];
     const normals: (number | null)[] = [];
 
+    let freeItemSpec: PromoSpecItem | null = null;
+    if (type === "beli_gratis" && body.free_product && typeof body.free_product === "object") {
+      const fp = body.free_product as Record<string, unknown>;
+      const freeImgId = Number(fp.image_id);
+      if (Number.isSafeInteger(freeImgId) && freeImgId > 0) {
+        if (rawItems.length + 1 > MAX_PROMO_ITEMS) {
+          return bad(`Maksimal total produk termasuk produk gratis adalah ${MAX_PROMO_ITEMS}.`);
+        }
+        const freeRow = db
+          .prepare("SELECT name, stored_filename FROM images WHERE id = ?")
+          .get(freeImgId) as { name: string; stored_filename: string } | undefined;
+        if (!freeRow) return bad("Gambar produk gratis tidak ditemukan.", 404);
+        let freePath = resolveUploadPath(freeRow.stored_filename);
+        let freeVariantId: number | null = null;
+        if (fp.variant_id !== undefined && fp.variant_id !== null) {
+          const vId = Number(fp.variant_id);
+          if (Number.isSafeInteger(vId) && vId > 0) {
+            const vRow = db.prepare("SELECT stored_filename FROM image_variants WHERE id = ? AND image_id = ?")
+              .get(vId, freeImgId) as { stored_filename: string } | undefined;
+            if (!vRow) return bad("Varian foto produk gratis tidak ditemukan.", 404);
+            freePath = processedPath(vRow.stored_filename);
+            freeVariantId = vId;
+          }
+        }
+        if (!freePath || !fs.existsSync(freePath)) return bad("File foto produk gratis tidak ditemukan.", 404);
+        const freeName = clean(fp.name, 60) || freeRow.name;
+        freeItemSpec = {
+          image_id: freeImgId,
+          variant_id: freeVariantId,
+          path: freePath,
+          name: freeName,
+          price_text: "GRATIS",
+          old_text: "",
+          tag: `GRATIS ${params.freeQty}`,
+        };
+      }
+    }
+
     for (const r of rawItems) {
       if (!r || typeof r !== "object" || !Number.isSafeInteger(Number(r.image_id)) || Number(r.image_id) <= 0) {
         return bad("Data produk tidak valid.");
@@ -149,8 +187,13 @@ export async function POST(req: Request) {
       } else {
         const c = computeItem(type, params, price, oldPrice);
         if (!c.ok) return bad(`${name}: ${c.error}`);
-        items.push({ ...sourceIds, path: p, name, price_text: c.priceText, old_text: c.oldText, tag: c.tag });
+        const tag = (type === "beli_gratis" && freeItemSpec) ? `BELI ${params.buyQty}` : c.tag;
+        items.push({ ...sourceIds, path: p, name, price_text: c.priceText, old_text: c.oldText, tag });
       }
+    }
+
+    if (freeItemSpec) {
+      items.push(freeItemSpec);
     }
 
     let bundle: PromoSpec["bundle"];
@@ -192,7 +235,9 @@ export async function POST(req: Request) {
     const request = {
       ...customSize, brand_snapshot: brand, format, theme, promo_type: type, title, subtitle: spec.subtitle, footer: spec.footer, badge: spec.badge,
       discount_percent: params.discountPercent, discount_amount: params.discountAmount,
-      buy_qty: params.buyQty, free_qty: params.freeQty, bundle_price: params.bundlePrice,
+      buy_qty: params.buyQty, free_qty: params.freeQty,
+      free_product: body.free_product ?? null,
+      bundle_price: params.bundlePrice,
       items: rawItems.map((r, index) => ({ image_id: Number(r.image_id), variant_id: r.variant_id == null ? null : Number(r.variant_id),
         name: items[index].name, price: clean(r.price, 30), old_price: clean(r.old_price, 30) })),
     };
