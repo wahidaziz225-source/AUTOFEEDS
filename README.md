@@ -1,10 +1,10 @@
 # AUTOfEEDS
 
-Studio konten promosi lokal: unggah foto produk, analisis melalui Ollama, buat caption dan poster, serta siapkan foto produk tanpa menimpa sumber asli.
+Studio promosi lokal yang berfokus pada Auto Feeds Express: unggah foto produk, siapkan informasi promo, lalu hasilkan poster dan caption untuk media sosial.
 
-Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow. Kode saat ini mencakup Creative Layout Engine (Fase 3), Product Image Studio (Fase 4), batch variasi desain (Fase 5), Design Editor berbasis layer (Fase 6), Brand Kit dan Content Studio (Fase 7), serta ekspor/ukuran khusus dan validasi akhir (Fase 8).
+Stack: Next.js 16.4.3, React 19.3, TypeScript, Tailwind 4, SQLite, dan Python/Pillow.
 
-Panduan langkah demi langkah: [docs/PANDUAN-PENGGUNAAN.md](docs/PANDUAN-PENGGUNAAN.md). Panduan visual HTML disertakan dalam paket unduhan.
+Panduan langkah demi langkah: [docs/PANDUAN-PENGGUNAAN.md](docs/PANDUAN-PENGGUNAAN.md).
 
 ## Menjalankan di Windows 11
 
@@ -24,18 +24,24 @@ Buka `http://localhost:3000`. Saat memperbarui proyek yang sudah ada, hentikan s
 
 ## Fitur yang tersedia
 
-- Upload JPG/PNG/WEBP dan penyimpanan lokal.
-- Analyzer dan Content Studio berbasis Ollama; model dipilih melalui Settings dan harus sudah terpasang.
-- Promo Composer: 1–6 produk atau bundling, harga tervalidasi, enam konsep komposisi, empat ukuran preset + custom 512–4096 px dan unduhan JPG/PNG.
-- Product Image Studio: pencahayaan, kontras, ketajaman, isolasi produk opsional, background transparan/warna, ukuran/posisi, bayangan, riwayat varian dan unduhan PNG foto.
-- Brand Kit: logo, palette, font, footer, default promosi dan template mandiri; snapshot menjaga hasil lama.
-- Content Studio: fakta manual/analisis, Indonesia/English, CTA/edukasi/copywriting, dan gaya brand melalui Ollama.
-- Design Editor: teks/harga/foto/bentuk sebagai layer terpisah, drag/resize/rotasi, undo/redo, penyimpanan dan unduhan JPG/PNG/SVG, transparansi PNG dan pilihan kualitas JPG.
-- Batch 4–6 poster dengan konsep berbeda, galeri perbandingan, desain pilihan, dan pembuatan ulang dari pengaturan tersimpan.
-- Pemilihan foto asli atau varian olahan untuk setiap produk di Promo Composer.
-- Content Library, History dan Settings.
+- **Auto Feeds Express** (`/express`, halaman utama): unggah foto produk, isi judul/tagline/harga, lalu hasilkan tiga variasi poster dan caption Instagram.
+- Unggah poster referensi untuk memberi arahan gaya pada generator yang mendukungnya.
+- Revisi poster dengan instruksi singkat seperti “lebih gelap”, “minimal”, atau “layout tengah”. Instruksi yang tidak didukung akan ditolak dengan petunjuk, bukan membuat duplikat tanpa perubahan.
+- Hasil dan data disimpan lokal; poster dapat diunduh sebagai JPG atau PNG.
 
-Pengolahan cahaya dan pembuatan poster tidak memerlukan Ollama. Untuk foto biasa yang belum transparan, penggantian background memerlukan model isolasi AI; PNG transparan dapat dikomposisikan langsung.
+### Penyedia AI
+
+- **Teks, caption, dan analisis gambar**: Google Gemini API atau Ollama lokal.
+- **Visual poster**: OpenAI GPT Image dan Gemini Image menghasilkan poster penuh. Cloudflare FLUX membuat latar visual yang kemudian disusun oleh renderer Auto Feeds. Renderer lokal tidak memerlukan API gambar.
+- Kunci API disimpan di database lokal dan tidak dikirim kembali ke browser. Saat menggunakan penyedia API, foto dan teks yang diperlukan dikirim ke layanan tersebut.
+- Skor kualitas tersedia untuk poster renderer lokal; poster penuh dari OpenAI/Gemini tidak memiliki skor renderer.
+
+### Variabel lingkungan
+
+- `AUTOFEEDS_PYTHON`: perintah/path Python yang dipakai server (default `python`), misalnya `python3` atau path virtualenv.
+- `AUTOFEEDS_DATA_DIR`: lokasi folder induk `database` dan `storage` (default folder proyek).
+
+Pembuatan poster lokal tidak memerlukan Ollama. Foto produk yang belum transparan dapat memakai model isolasi AI opsional; PNG transparan dapat diproses langsung.
 
 ## Pemasangan AI background removal (opsional)
 

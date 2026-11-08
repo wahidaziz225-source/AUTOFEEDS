@@ -1,7 +1,7 @@
 /**
  * Scene Composer API – POST /api/express/scene-compose
  * Memanggil scene_composer.py untuk menghasilkan poster studio-grade.
- * Mendukung 3 variasi sekaligus (parallel via ThreadPoolExecutor di sisi Python).
+ * Mendukung 3 variasi sekaligus (satu proses Python per variasi, dijalankan paralel dari Node).
  */
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -15,6 +15,7 @@ import { generateAI } from "@/lib/ollama";
 import { generateGeminiPoster } from "@/lib/gemini-image";
 import { generateOpenAiPoster } from "@/lib/openai-image";
 import { generateCloudflareBackground } from "@/lib/cloudflare-image";
+import { parseAmount } from "@/lib/promo-options";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +46,7 @@ async function runComposer(spec: Record<string, unknown>, outPath: string, previ
   fs.writeFileSync(specFile, JSON.stringify(spec), "utf-8");
   try {
     const { stdout } = await execFileAsync(
-      "python",
+      process.env.AUTOFEEDS_PYTHON || "python",
       [SCENE_SCRIPT, specFile, outPath, "--preview", previewPath],
       { timeout: 120_000, windowsHide: true }
     );
@@ -86,7 +87,7 @@ function generateCaption(opts: {
 
   const priceBlock = price
     ? oldPrice
-      ? `\n💰 Dari ~~${oldPrice}~~ sekarang hanya ${price}!`
+      ? `\n💰 Harga normal ${oldPrice}, sekarang hanya ${price}!`
       : `\n💰 Harga spesial: ${price}`
     : "";
 
@@ -175,6 +176,11 @@ export async function POST(req: Request) {
     const oldPrice = clean(body.old_price ?? "", 30);
     const goal = String(body.goal ?? "diskon");
     if (!GOALS.includes(goal as (typeof GOALS)[number])) return bad("Tujuan promosi tidak valid.");
+    const promoAmount = parseAmount(price);
+    const normalAmount = parseAmount(oldPrice);
+    if (goal === "diskon" && promoAmount !== null && normalAmount !== null && normalAmount <= promoAmount) {
+      return bad("Harga normal harus lebih besar daripada harga promo.");
+    }
     const discountTag = clean(body.discount_tag ?? "", 20);
     const brandName = clean(body.brand_name ?? "", 60);
     const freeInstructions = clean(body.instructions ?? "", 200);
@@ -386,7 +392,7 @@ Mulai dengan hook emosional, jelaskan manfaat, akhiri dengan CTA, tambahkan 6-8 
   }
 }
 
-// GET: Revisi bahasa alami → render ulang satu desain
+// PATCH: Revisi bahasa alami → render ulang satu desain
 export async function PATCH(req: Request) {
   try {
     const body = await req.json() as Record<string, unknown>;
@@ -409,8 +415,6 @@ export async function PATCH(req: Request) {
     if (rev.includes("gelap") || rev.includes("malam")) patch.mood = "dark";
     if (rev.includes("terang") || rev.includes("cerah")) patch.mood = "bright";
     if (rev.includes("mewah") || rev.includes("premium")) patch.mood = "luxury";
-    if (rev.includes("besar") && rev.includes("produk")) patch.product_scale = 1.3;
-    if (rev.includes("kecil") && rev.includes("produk")) patch.product_scale = 0.8;
     if (rev.includes("minimal")) patch.recipe = "minimal_luxury";
     if (rev.includes("tengah")) patch.recipe = "hero_center_burst";
     if (rev.includes("diagonal")) patch.recipe = "split_diagonal";
@@ -422,7 +426,7 @@ export async function PATCH(req: Request) {
         const textModel = getSetting("ai_provider") === "gemini" ? getSetting("gemini_text_model") : getSetting("text_model");
         const prompt = `Pengguna meminta revisi poster: "${revision}". 
 Berikan JSON diff dari parameter berikut yang perlu diubah:
-mood (dark/bright/warm/luxury), recipe (hero_left_target/hero_center_burst/split_diagonal/flatlay_overhead/price_star/minimal_luxury), product_scale (0.7-1.4), background_style (string), headline (string), tagline (string).
+mood (dark/bright/warm/luxury), recipe (hero_left_target/hero_center_burst/split_diagonal/flatlay_overhead/price_star/minimal_luxury), headline (string), tagline (string).
 Jawab HANYA JSON, tidak ada teks lain. Contoh: {"mood":"dark","recipe":"minimal_luxury"}`;
         const aiRes = await Promise.race([
           generateAI({ model: textModel, prompt, temperature: 0.3 }),
@@ -438,9 +442,14 @@ Jawab HANYA JSON, tidak ada teks lain. Contoh: {"mood":"dark","recipe":"minimal_
     if (typeof patch.recipe === "string" && RECIPES.includes(patch.recipe as Recipe)) safePatch.recipe = patch.recipe;
     if (typeof patch.headline === "string") safePatch.headline = clean(patch.headline, 60);
     if (typeof patch.tagline === "string") safePatch.tagline = clean(patch.tagline, 80);
-    if (typeof patch.background_style === "string") safePatch.background_style = clean(patch.background_style, 80);
-    if (typeof patch.product_scale === "number" && Number.isFinite(patch.product_scale)) {
-      safePatch.product_scale = Math.min(1.4, Math.max(0.7, patch.product_scale));
+
+    // Hanya parameter yang benar-benar dibaca renderer yang boleh lolos. Tanpa perubahan
+    // yang dikenali, render ulang hanya akan menghasilkan duplikat tanpa perbedaan.
+    if (Object.keys(safePatch).length === 0) {
+      return bad(
+        "Revisi belum dikenali. Coba kata seperti: gelap, terang, mewah, minimal, tengah, diagonal, atau bintang; atau tulis perubahan judul/tagline.",
+        422
+      );
     }
 
     const newSpec = { ...prevSpec, ...safePatch };

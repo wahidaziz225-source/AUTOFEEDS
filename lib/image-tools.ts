@@ -27,7 +27,7 @@ export async function processImage(storedFilename: string): Promise<ProcessResul
 
   try {
     const { stdout } = await execFileAsync(
-      "python",
+      process.env.AUTOFEEDS_PYTHON || "python",
       [SCRIPT, src, dst, "1024"],
       { timeout: 60_000, windowsHide: true }
     );

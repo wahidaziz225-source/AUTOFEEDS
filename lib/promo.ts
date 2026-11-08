@@ -50,7 +50,7 @@ export async function composePromo(spec: PromoSpec): Promise<string> {
   const specFile = path.join(PROMO_DIR, `.spec-${crypto.randomUUID()}.json`);
   fs.writeFileSync(specFile, JSON.stringify({...spec,png_output:out.replace(/\.jpg$/, ".png")}), "utf-8");
   try {
-    await execFileAsync("python", [SCRIPT, specFile, out], {
+    await execFileAsync(process.env.AUTOFEEDS_PYTHON || "python", [SCRIPT, specFile, out], {
       timeout: 60_000,
       windowsHide: true,
     });

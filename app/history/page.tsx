@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-// Redirect bookmarks and old links to the retained Auto Feeds Express workflow.
+// Keep old bookmarks pointed at the Express poster history.
 export default function HistoryRedirect() {
-  redirect("/express");
+  redirect("/express/history");
 }

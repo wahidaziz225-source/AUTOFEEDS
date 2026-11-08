@@ -123,10 +123,10 @@ def compose_ai_background_poster(spec, recorder=None):
     bg_path = spec.get("background_image_path")
     with Image.open(bg_path) as source:
         canvas = ImageOps.fit(source.convert("RGBA"), (W, H), method=Image.Resampling.LANCZOS)
-    # Generated images can contain stray pseudo-letters. Soften and darken them
-    # before adding the app's crisp, deterministic text and product layers.
-    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=max(12, int(W * 0.016))))
-    veil = Image.new("RGBA", (W, H), (8, 12, 28, 125))
+    # Keep the generated scene's photographic detail; a heavy blur made the
+    # poster look muddy. A light veil leaves enough contrast for exact copy.
+    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=max(2, int(W * 0.003))))
+    veil = Image.new("RGBA", (W, H), (8, 12, 28, 62))
     canvas.alpha_composite(veil)
     d = ImageDraw.Draw(canvas)
     margin = int(W * 0.075)
@@ -191,17 +191,33 @@ def compose_ai_background_poster(spec, recorder=None):
     ink = (18, 27, 50, 255)
     accent = parse_color(spec.get("accent_color", "#6d4aff"))
     if price:
-        f_price = get_font("bold", int(W * 0.061))
-        label = f"{price}  ·  {old_price}" if old_price else price
-        while f_price.size > int(W * 0.038) and d.textlength(label, font=f_price) > W - 2 * margin - 30:
+        f_label = get_font("bold", max(16, int(W * 0.019)))
+        promo_label = "HARGA PROMO"
+        d.text(((W - d.textlength(promo_label, font=f_label)) / 2, panel_y + int(H * 0.018)), promo_label, font=f_label, fill=accent)
+        f_price = get_font("bold", int(W * 0.057))
+        while f_price.size > int(W * 0.038) and d.textlength(price, font=f_price) > W - 2 * margin - 30:
             f_price = get_font("bold", f_price.size - 2)
-        d.text(((W - d.textlength(label, font=f_price)) / 2, panel_y + int(H * 0.027)), label, font=f_price, fill=accent)
+        price_y = panel_y + int(H * 0.045)
+        d.text(((W - d.textlength(price, font=f_price)) / 2, price_y), price, font=f_price, fill=accent)
+        if old_price:
+            f_old = get_font("regular", max(16, int(W * 0.022)))
+            old_label = f"Harga normal {old_price}"
+            while f_old.size > 15 and d.textlength(old_label, font=f_old) > W - 2 * margin - 30:
+                f_old = get_font("regular", f_old.size - 1)
+            old_x = (W - d.textlength(old_label, font=f_old)) / 2
+            old_y = panel_y + int(H * 0.112)
+            d.text((old_x, old_y), old_label, font=f_old, fill=(98, 107, 126, 255))
+            line_y = old_y + max(8, int(f_old.size * 0.57))
+            d.line((old_x, line_y, old_x + d.textlength(old_label, font=f_old), line_y), fill=(117, 124, 141, 210), width=2)
     if tagline:
-        f_tag = get_font("regular", int(W * 0.026))
+        f_tag = get_font("regular", int(W * 0.021))
         tag = tagline
-        while f_tag.size > 17 and d.textlength(tag, font=f_tag) > W - 2 * margin - 30:
+        while f_tag.size > 15 and d.textlength(tag, font=f_tag) > W - 2 * margin - 30:
             f_tag = get_font("regular", f_tag.size - 1)
-        d.text(((W - d.textlength(tag, font=f_tag)) / 2, panel_y + int(H * 0.105)), tag, font=f_tag, fill=ink)
+        max_tag_w = W - 2 * margin - 30
+        while tag and d.textlength(tag, font=f_tag) > max_tag_w:
+            tag = tag[:-2].rstrip() + "…"
+        d.text(((W - d.textlength(tag, font=f_tag)) / 2, panel_y + int(H * 0.15)), tag, font=f_tag, fill=ink)
     if recorder:
         recorder.add("shape", "Panel informasi", panel[0], panel[1], panel[2] - panel[0], panel[3] - panel[1], fill="#fafbff")
     return canvas

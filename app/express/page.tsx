@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { parseAmount } from "@/lib/promo-options";
 import {
   AlertCircle,
   // ArrowLeft, // tidak dipakai
@@ -363,6 +364,15 @@ export default function ExpressPage() {
     if (!headline.trim()) {
       setError("Isi nama / headline produk.");
       return;
+    }
+    if (goal === "diskon" && price.trim() && oldPrice.trim()) {
+      const promoAmount = parseAmount(price);
+      const normalAmount = parseAmount(oldPrice);
+      if (promoAmount !== null && normalAmount !== null && normalAmount <= promoAmount) {
+        setError("Harga normal harus lebih besar daripada harga promo.");
+        setStep(3);
+        return;
+      }
     }
 
     setError("");
