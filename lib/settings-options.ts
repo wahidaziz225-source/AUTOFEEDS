@@ -5,13 +5,89 @@ export type SettingField = {
   key: string;
   label: string;
   hint: string;
-  kind: "text" | "number" | "select";
+  kind: "text" | "password" | "number" | "select";
   options?: { value: string; label: string }[];
   min?: number;
   max?: number;
 };
 
 export const SETTING_FIELDS: SettingField[] = [
+  {
+    key: "ai_provider",
+    label: "Penyedia AI",
+    hint: "Gemini API memakai layanan Google AI; Ollama menjalankan model di komputer ini.",
+    kind: "select",
+    options: [
+      { value: "gemini", label: "Google Gemini API" },
+      { value: "ollama", label: "Ollama lokal" },
+    ],
+  },
+  {
+    key: "gemini_api_key",
+    label: "Gemini API key",
+    hint: "Dibutuhkan untuk Gemini. Kunci disimpan di database lokal dan tidak ditampilkan kembali.",
+    kind: "password",
+  },
+  {
+    key: "image_provider",
+    label: "Mesin visual poster",
+    hint: "Untuk poster penuh pilih OpenAI atau Gemini. Cloudflare hanya membuat latar dan memakai layout Auto Feeds.",
+    kind: "select",
+    options: [
+      { value: "cloudflare", label: "Cloudflare FLUX (latar saja, hemat biaya)" },
+      { value: "openai", label: "OpenAI GPT Image (poster penuh, kualitas tinggi)" },
+      { value: "gemini", label: "Google Gemini Image (poster penuh)" },
+      { value: "renderer", label: "Renderer lokal (tanpa API gambar)" },
+    ],
+  },
+  {
+    key: "cloudflare_account_id",
+    label: "Cloudflare Account ID",
+    hint: "Temukan di dashboard Cloudflare pada halaman Workers AI.",
+    kind: "text",
+  },
+  {
+    key: "cloudflare_api_token",
+    label: "Cloudflare Workers AI API token",
+    hint: "Buat token untuk Workers AI. Token disimpan lokal dan tidak ditampilkan kembali.",
+    kind: "password",
+  },
+  {
+    key: "cloudflare_image_model",
+    label: "Model Cloudflare Image",
+    hint: "Default: @cf/black-forest-labs/flux-2-klein-4b",
+    kind: "text",
+  },
+  {
+    key: "openai_api_key",
+    label: "OpenAI API key",
+    hint: "Dibutuhkan jika mesin visual OpenAI dipilih. Disimpan lokal dan tidak ditampilkan kembali.",
+    kind: "password",
+  },
+  {
+    key: "openai_image_model",
+    label: "Model OpenAI Image",
+    hint: "Contoh: gpt-image-2.5-sunburst. Membuat poster lengkap; biaya API OpenAI berlaku untuk tiap variasi.",
+    kind: "text",
+  },
+  {
+    key: "gemini_text_model",
+    label: "Model Gemini teks",
+    hint: "Contoh: gemini-2.5-flash",
+    kind: "text",
+  },
+  {
+    key: "gemini_vision_model",
+    label: "Model Gemini analisis gambar",
+    hint: "Contoh: gemini-2.5-flash",
+    kind: "text",
+  },
+  {
+    key: "gemini_image_model",
+    label: "Model Gemini pembuat poster",
+    hint: "Model gambar, contoh: gemini-2.5-flash-image",
+    kind: "text",
+  },
   {
     key: "ollama_url",
     label: "Alamat Ollama",
@@ -58,7 +134,7 @@ export const SETTING_FIELDS: SettingField[] = [
   },
 ];
 
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
+const MODEL_RE = /^[A-Za-z0-9@][A-Za-z0-9@._:/-]{0,99}$/;
 
 export type SettingCheck = { ok: true; value: string } | { ok: false; error: string };
 
@@ -76,10 +152,25 @@ export function validateSetting(key: string, raw: unknown): SettingCheck {
       return { ok: false, error: "Alamat Ollama harus berupa URL http:// atau https://." };
     }
   }
-  if (key === "vision_model" || key === "text_model") {
+  if (key === "vision_model" || key === "text_model" || key === "gemini_text_model" || key === "gemini_vision_model" || key === "gemini_image_model" || key === "openai_image_model" || key === "cloudflare_image_model") {
     return MODEL_RE.test(v)
       ? { ok: true, value: v }
       : { ok: false, error: `${field.label}: nama model tidak valid.` };
+  }
+  if (key === "gemini_api_key" || key === "openai_api_key") {
+    return v.length <= 300 && (v.length === 0 || /^[A-Za-z0-9._-]+$/.test(v))
+      ? { ok: true, value: v }
+      : { ok: false, error: "Gemini API key memiliki format yang tidak valid." };
+  }
+  if (key === "cloudflare_api_token") {
+    return v.length <= 300 && (v.length === 0 || /^[A-Za-z0-9._-]+$/.test(v))
+      ? { ok: true, value: v }
+      : { ok: false, error: "Cloudflare API token memiliki format yang tidak valid." };
+  }
+  if (key === "cloudflare_account_id") {
+    return /^[a-fA-F0-9]{32}$/.test(v)
+      ? { ok: true, value: v.toLowerCase() }
+      : { ok: false, error: "Cloudflare Account ID harus berisi 32 karakter heksadesimal." };
   }
   if (field.kind === "number") {
     const n = Number(v);

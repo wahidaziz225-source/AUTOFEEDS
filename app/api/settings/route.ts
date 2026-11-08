@@ -6,8 +6,8 @@ const bad = (error: string, status = 400) => NextResponse.json({ error }, { stat
 
 export async function GET() {
   const settings: Record<string, string> = {};
-  for (const f of SETTING_FIELDS) settings[f.key] = getSetting(f.key);
-  return NextResponse.json({ settings });
+  for (const f of SETTING_FIELDS) settings[f.key] = ["gemini_api_key", "openai_api_key", "cloudflare_api_token"].includes(f.key) ? "" : getSetting(f.key);
+  return NextResponse.json({ settings, hasGeminiApiKey: Boolean(getSetting("gemini_api_key")), hasOpenAiApiKey: Boolean(getSetting("openai_api_key")), hasCloudflareApiToken: Boolean(getSetting("cloudflare_api_token")) });
 }
 
 // Body: { settings: { key: value, ... } }. Semua nilai divalidasi dulu; jika ada yang salah, tidak ada yang disimpan.
@@ -27,12 +27,15 @@ export async function PUT(req: Request) {
     }
     if (clean.length === 0) return bad("Tidak ada pengaturan yang dikirim.");
 
-    for (const [key, value] of clean) setSetting(key, value);
+    for (const [key, value] of clean) {
+      if (["gemini_api_key", "openai_api_key", "cloudflare_api_token"].includes(key) && value === "") continue;
+      setSetting(key, value);
+    }
     logActivity("Ubah pengaturan", "settings", null, clean.map(([k]) => k).join(", "));
 
     const settings: Record<string, string> = {};
-    for (const f of SETTING_FIELDS) settings[f.key] = getSetting(f.key);
-    return NextResponse.json({ settings });
+    for (const f of SETTING_FIELDS) settings[f.key] = ["gemini_api_key", "openai_api_key", "cloudflare_api_token"].includes(f.key) ? "" : getSetting(f.key);
+    return NextResponse.json({ settings, hasGeminiApiKey: Boolean(getSetting("gemini_api_key")), hasOpenAiApiKey: Boolean(getSetting("openai_api_key")), hasCloudflareApiToken: Boolean(getSetting("cloudflare_api_token")) });
   } catch (e) {
     return bad(e instanceof Error ? e.message : "Gagal menyimpan pengaturan.", 500);
   }

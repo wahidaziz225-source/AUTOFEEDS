@@ -137,7 +137,7 @@ export default function EditorPage(){
   function dimension(key:'width'|'height',value:number){if(!layer||!Number.isFinite(value))return;const patch:Partial<DesignLayer>={[key]:Math.max(1,value)};if(layer.kind==='image')patch[key==='width'?'height':'width']=Math.max(1,value)*(key==='width'?layer.height/layer.width:layer.width/layer.height);if(key==='height'&&layer.kind==='text')patch.fontSize=(layer.fontSize??32)*Math.max(1,value)/layer.height;updateLayer(patch);}
 
   return <div className="mx-auto max-w-[1600px] space-y-4" onKeyDown={keyboard} tabIndex={-1}>
-    <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-slate-900">Design Editor</h1><p className="mt-1 text-sm text-slate-500">Edit layer, simpan dokumen, lalu unduh hasil. Poster asal tetap tersedia.</p></div><Link href="/promo" className={button}>← Promo Composer</Link></header>
+    <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-slate-900">Design Editor</h1><p className="mt-1 text-sm text-slate-500">Edit layer, simpan dokumen, lalu unduh hasil. Poster asal tetap tersedia.</p></div><Link href="/express" className={button}>← Auto Feeds Express</Link></header>
     {error&&<p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
     {notice&&<p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">

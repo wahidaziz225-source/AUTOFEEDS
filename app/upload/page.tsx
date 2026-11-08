@@ -1,7 +1,6 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   UploadCloud,
@@ -330,7 +329,6 @@ export default function UploadPage() {
                     {img.width && img.height ? ` • ${img.width}×${img.height}` : ""}
                   </div>
                   <div className="text-xs text-slate-400">{formatDate(img.created_at)}</div>
-                  <Link href={`/image-studio?image_id=${img.id}`} className="inline-block py-2 text-xs font-semibold text-indigo-600">Olah foto produk →</Link>
                   <button
                     onClick={() => deleteImage(img)}
                     className="mt-2 flex items-center gap-1.5 text-xs font-medium text-rose-600 hover:text-rose-700"

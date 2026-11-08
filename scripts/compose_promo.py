@@ -5,7 +5,7 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from creative_layout import plan as creative_plan, STYLES
-from layer_recorder import LayerRecorder, RecordedDraw
+from layer_recorder import LayerRecorder, RecordedDraw, rgba
 
 Image.MAX_IMAGE_PIXELS = 100_000_000
 
@@ -290,6 +290,30 @@ def draw_text_block(canvas, d, x, y, w, h, item, st):
     gap_old_pill = 10 if price else 0
     total_block_h = name_total_h + gap_name_old + old_h + gap_old_pill + (pill_h if price else 0)
 
+    if total_block_h > h:
+        shrink = max(0.60, (h - 4) / max(1, total_block_h))
+        nf_size = max(11, int(nf_size * shrink))
+        nf = load_font(F_BOLD, nf_size)
+        lines = wrap(d, name, nf, w, 2)
+        line_h = int(nf.size * 1.25)
+        name_total_h = len(lines) * line_h
+        if old:
+            of_size = max(9, int(of_size * shrink))
+            of = load_font(F_REG, of_size)
+            old_h = int(of_size * 1.35)
+        if price:
+            pf_size = max(12, int(pf_size * shrink))
+            pf = load_font(F_IMPACT, pf_size)
+            pb = d.textbbox((0, 0), price, font=pf)
+            pw, ph = pb[2] - pb[0], pb[3] - pb[1]
+            pill_px = max(12, int(ph * 0.75))
+            pill_py = max(3, int(ph * 0.25))
+            pill_w = pw + 2 * pill_px
+            pill_h = ph + 2 * pill_py
+        gap_name_old = int(gap_name_old * shrink)
+        gap_old_pill = int(gap_old_pill * shrink)
+        total_block_h = name_total_h + gap_name_old + old_h + gap_old_pill + (pill_h if price else 0)
+
     # Center the entire text stack vertically in the lower card section
     start_y = y + max(0, (h - total_block_h) // 2)
 
@@ -332,7 +356,12 @@ def draw_text_block(canvas, d, x, y, w, h, item, st):
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, pill_w, pill_h], radius=pill_h // 2, fill=255)
     canvas.paste(pill_thumb, (int(pill_x), int(pill_y)), mask)
 
-    d.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h], radius=pill_h // 2, outline=(255, 255, 255, 170), width=1)
+    if isinstance(d, RecordedDraw):
+        d.draw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h], radius=pill_h // 2, outline=(255, 255, 255, 170), width=1)
+        d.recorder.add('rect', 'Panel / label harga', pill_x, pill_y, pill_w, pill_h,
+                       fill=rgba(st["c1"]), stroke=rgba((255, 255, 255, 170)), strokeWidth=1, radius=pill_h // 2)
+    else:
+        d.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h], radius=pill_h // 2, outline=(255, 255, 255, 170), width=1)
     d.text((pill_x + pill_px - pb[0], pill_y + pill_py - pb[1]), price, font=pf, fill=WHITE)
 
 

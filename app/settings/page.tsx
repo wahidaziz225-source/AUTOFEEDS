@@ -13,6 +13,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [hasGeminiApiKey, setHasGeminiApiKey] = useState(false);
+  const [hasOpenAiApiKey, setHasOpenAiApiKey] = useState(false);
+  const [hasCloudflareApiToken, setHasCloudflareApiToken] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -21,6 +24,9 @@ export default function SettingsPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Gagal memuat pengaturan.");
         setValues(data.settings);
+        setHasGeminiApiKey(Boolean(data.hasGeminiApiKey));
+        setHasOpenAiApiKey(Boolean(data.hasOpenAiApiKey));
+        setHasCloudflareApiToken(Boolean(data.hasCloudflareApiToken));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Gagal memuat pengaturan.");
       }
@@ -47,6 +53,9 @@ export default function SettingsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Gagal menyimpan pengaturan.");
       setValues(data.settings);
+      setHasGeminiApiKey(Boolean(data.hasGeminiApiKey));
+      setHasOpenAiApiKey(Boolean(data.hasOpenAiApiKey));
+      setHasCloudflareApiToken(Boolean(data.hasCloudflareApiToken));
       setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Gagal menyimpan pengaturan.");
@@ -59,7 +68,7 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-2xl space-y-6">
       <PageHeader
         title="Settings"
-        description="Pengaturan AI lokal dan unggahan. Disimpan di database komputer ini."
+        description="Pilih AI untuk teks dan mesin visual untuk poster. Kunci API disimpan di komputer ini."
       />
       <ErrorBanner message={error} />
 
@@ -67,7 +76,14 @@ export default function SettingsPage() {
 
       {values && (
         <Card className="space-y-5">
-          {SETTING_FIELDS.map((f) => (
+          {SETTING_FIELDS.filter((f) => {
+            if (values.ai_provider === "gemini" ? ["ollama_url", "vision_model", "text_model"].includes(f.key) : ["gemini_text_model", "gemini_vision_model"].includes(f.key)) return false;
+            if (f.key === "gemini_image_model" && values.image_provider !== "gemini") return false;
+            if (["openai_api_key", "openai_image_model"].includes(f.key) && values.image_provider !== "openai") return false;
+            if (["cloudflare_account_id", "cloudflare_api_token", "cloudflare_image_model"].includes(f.key) && values.image_provider !== "cloudflare") return false;
+            if (f.key === "gemini_api_key" && values.ai_provider !== "gemini" && values.image_provider !== "gemini") return false;
+            return true;
+          }).map((f) => (
             <label key={f.key} className="block text-sm font-medium text-slate-700">
               {f.label}
               {f.kind === "select" ? (
@@ -85,10 +101,11 @@ export default function SettingsPage() {
               ) : (
                 <input
                   className={inputCls}
-                  type={f.kind === "number" ? "number" : "text"}
+                  type={f.kind === "number" ? "number" : f.kind === "password" ? "password" : "text"}
                   min={f.min}
                   max={f.max}
                   value={values[f.key] ?? ""}
+                  placeholder={f.key === "cloudflare_api_token" && hasCloudflareApiToken ? "Token tersimpan; isi hanya untuk mengganti" : f.key === "openai_api_key" && hasOpenAiApiKey ? "Kunci tersimpan; isi hanya untuk mengganti" : f.key === "gemini_api_key" && hasGeminiApiKey ? "Kunci tersimpan; isi hanya untuk mengganti" : undefined}
                   onChange={(e) => change(f.key, e.target.value)}
                 />
               )}

@@ -18,6 +18,14 @@ function initDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
 
+  // Migrasi tambahan: tambah kolom opsional yang mungkin belum ada di DB lama
+  const migrations = [
+    "ALTER TABLE promo_designs ADD COLUMN preview_filename TEXT",
+  ];
+  for (const m of migrations) {
+    try { db.exec(m); } catch { /* kolom sudah ada */ }
+  }
+
   const insertSetting = db.prepare(
     "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)"
   );

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDb, getSetting, logActivity } from "./db";
-import { ollamaGenerate } from "./ollama";
+import { generateAI } from "./ollama";
 import { AI_DIR, aiFilenameFor } from "./image-tools";
 import { UPLOAD_DIR } from "./storage";
 
@@ -69,10 +69,12 @@ async function runAnalysis(imageId: number): Promise<void> {
   if (!fs.existsSync(file)) file = path.join(UPLOAD_DIR, row.stored_filename);
   if (!fs.existsSync(file)) throw new Error("File gambar tidak ditemukan di penyimpanan.");
 
-  const model = getSetting("vision_model");
+  const model = getSetting("ai_provider") === "gemini" ? getSetting("gemini_vision_model") : getSetting("vision_model");
   const b64 = fs.readFileSync(file).toString("base64");
+  const ext = path.extname(file).toLowerCase();
+  const imageMimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : ext === ".gif" ? "image/gif" : "image/jpeg";
   const t0 = Date.now();
-  const raw = await ollamaGenerate({ model, prompt: PROMPT, images: [b64], json: true });
+  const raw = await generateAI({ model, prompt: PROMPT, images: [b64], imageMimeType, json: true });
   const duration = Date.now() - t0;
 
   const parsed = parseJson(raw);

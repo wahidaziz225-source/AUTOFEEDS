@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS promo_designs (
   theme TEXT NOT NULL,
   items_json TEXT NOT NULL,
   output_filename TEXT NOT NULL UNIQUE,
+  preview_filename TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS promo_generation (
@@ -143,24 +144,6 @@ CREATE TABLE IF NOT EXISTS brand_assets (
   width INTEGER NOT NULL,
   height INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS creative_studio_designs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  batch_id TEXT,
-  title TEXT NOT NULL,
-  mode TEXT NOT NULL,
-  style_id TEXT NOT NULL,
-  format_id TEXT NOT NULL,
-  product_name TEXT,
-  headline TEXT,
-  price_normal TEXT,
-  price_promo TEXT,
-  image_path TEXT NOT NULL,
-  is_favorite INTEGER NOT NULL DEFAULT 0,
-  metadata_json TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_creative_batch ON creative_studio_designs(batch_id);
-
 CREATE TABLE IF NOT EXISTS brand_templates (
   design_id INTEGER PRIMARY KEY REFERENCES designs(id) ON DELETE CASCADE,
   brand_id INTEGER REFERENCES brand_kits(id) ON DELETE SET NULL,
@@ -183,6 +166,17 @@ CREATE INDEX IF NOT EXISTS idx_logs_created ON activity_logs(created_at);
 `;
 
 export const DEFAULT_SETTINGS: Record<string, string> = {
+  ai_provider: "gemini",
+  image_provider: "cloudflare",
+  cloudflare_account_id: "",
+  cloudflare_api_token: "",
+  cloudflare_image_model: "@cf/black-forest-labs/flux-2-klein-4b",
+  openai_api_key: "",
+  openai_image_model: "gpt-image-2.5-sunburst",
+  gemini_api_key: "",
+  gemini_text_model: "gemini-2.5-flash",
+  gemini_vision_model: "gemini-2.5-flash",
+  gemini_image_model: "gemini-2.5-flash-image",
   ollama_url: "http://localhost:11434",
   vision_model: "qwen2.5vl:3b",
   text_model: "qwen2.5:3b",

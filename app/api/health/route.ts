@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { getDb, getSetting, logActivity, DB_PATH } from "@/lib/db";
+import { getDb, logActivity } from "@/lib/db";
 import { ensureUploadDir, UPLOAD_DIR } from "@/lib/storage";
 
 export async function GET() {
@@ -30,12 +30,10 @@ export async function GET() {
     return NextResponse.json({
       status: "ok",
       database: {
-        path: DB_PATH,
         tables: tables.map((t) => t.name),
         activity_logs_count: logCount,
-        ollama_url: getSetting("ollama_url"),
       },
-      storage: { path: UPLOAD_DIR, writable: true },
+      storage: { writable: true },
     });
   } catch (e) {
     return NextResponse.json(
